@@ -1,0 +1,7 @@
+Wron export security notes
+
+0 unsafe or credential files omitted.
+1 files had detected credentials replaced with WRON_SECRET_REMOVED.
+Configure your own credentials before running the project. Keep private keys on your server.
+Public client SDK keys may remain. Review the project before sharing it; automated detection is not exhaustive.
+If a private key was previously shared, revoke or rotate it with its provider.
