@@ -21,8 +21,7 @@
     {
       "binding": "DB",
       "database_name": "tapeflow",
-      // Replace with the id `npx wrangler d1 create tapeflow` prints.
-      "database_id": "REPLACE_WITH_D1_DATABASE_ID"
+      "database_id": "003baf0a-ff3f-4d1b-89ee-c75c50f1a31f"
     }
   ]
 }
