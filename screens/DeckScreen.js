@@ -577,19 +577,28 @@ export default function DeckScreen() {
   const nudgeSpeed = (dir) => setSpeedValue(speedRef.current + dir * SPEED_STEP);
   const nudgeKey = (dir) => setKeyValue(semisRef.current + dir * KEY_STEP);
 
-  // Holding an end repeats, so crossing the whole range is one press rather than
-  // a hundred taps.
+  // A tap is one step and a hold is a stream of them. The step on a tap comes
+  // from onPress, on release, and the repeat waits before it starts — otherwise
+  // a tap would take a step on the way down and a hold would take one too many.
   const repeat = useRef(null);
+  const repeatDelay = useRef(null);
   const stopRepeat = () => {
+    if (repeatDelay.current) {
+      clearTimeout(repeatDelay.current);
+      repeatDelay.current = null;
+    }
     if (repeat.current) {
       clearInterval(repeat.current);
       repeat.current = null;
     }
   };
   const startRepeat = (fn) => {
-    fn();
     stopRepeat();
-    repeat.current = setInterval(fn, 80);
+    repeatDelay.current = setTimeout(() => {
+      repeatDelay.current = null;
+      fn();
+      repeat.current = setInterval(fn, 70);
+    }, 300);
   };
 
   // The audio follows the hand once it has stopped moving.
@@ -611,7 +620,10 @@ export default function DeckScreen() {
         stopRepeat();
       },
       onPanResponderMove: (e, g) => {
-        const across = Math.max(120, W - 160);
+        // Deliberately slow to move: a swipe only reaches about a screen, so a
+        // percent has to be several pixels and five cents a fine one. Speed
+        // covers its range in a deck and a half, the key in two and a half.
+        const across = kind === 'speed' ? Math.max(240, W * 1.8) : Math.max(320, W * 2.6);
         const spread = kind === 'speed' ? SPEED_MAX - SPEED_MIN : KEY_MAX - KEY_MIN;
         const next = dragFrom[kind] + (g.dx / across) * spread;
         if (kind === 'speed') setSpeedValue(next);
@@ -746,6 +758,7 @@ export default function DeckScreen() {
                 accessibilityRole="button"
                 accessibilityLabel="Slower"
                 hitSlop={10}
+                onPress={() => nudgeSpeed(-1)}
                 onPressIn={() => startRepeat(() => nudgeSpeed(-1))}
                 onPressOut={stopRepeat}
                 style={s.pillStep}
@@ -765,6 +778,7 @@ export default function DeckScreen() {
                 accessibilityRole="button"
                 accessibilityLabel="Faster"
                 hitSlop={10}
+                onPress={() => nudgeSpeed(1)}
                 onPressIn={() => startRepeat(() => nudgeSpeed(1))}
                 onPressOut={stopRepeat}
                 style={s.pillStep}
@@ -778,6 +792,7 @@ export default function DeckScreen() {
                 accessibilityRole="button"
                 accessibilityLabel="Lower the key"
                 hitSlop={10}
+                onPress={() => nudgeKey(-1)}
                 onPressIn={() => startRepeat(() => nudgeKey(-1))}
                 onPressOut={stopRepeat}
                 style={s.pillStep}
@@ -795,6 +810,7 @@ export default function DeckScreen() {
                 accessibilityRole="button"
                 accessibilityLabel="Raise the key"
                 hitSlop={10}
+                onPress={() => nudgeKey(1)}
                 onPressIn={() => startRepeat(() => nudgeKey(1))}
                 onPressOut={stopRepeat}
                 style={s.pillStep}
