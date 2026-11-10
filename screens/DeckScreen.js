@@ -507,7 +507,9 @@ export default function DeckScreen() {
   const speedX = Math.abs(hud.vel) / NORMAL;
   // Read the wheel out as a speed adjuster, the way the recorder it is modelled
   // on does: 100% is the tape at its own speed, 50% is half and 200% is double.
-  const speedPct = Math.round(speedX * 100);
+  // The number is clamped to that range, because a hand can flick faster than the
+  // tape is allowed to follow and the readout should say what is being heard.
+  const speedPct = Math.round(Math.min(PLAYABLE_X, Math.max(SLOWEST_X, speedX)) * 100);
   const moving = Math.abs(hud.vel) >= 1;
   const legend = legendMsg
     || (anyArmed
@@ -612,7 +614,7 @@ export default function DeckScreen() {
               color={recording ? t.accent : t.warning}
             />
             <EngravedText size={12} color={recording ? t.accent : t.warning} style={{ marginLeft: 6 }}>
-              {recording ? 'RECORDING · 100%' : !moving ? 'STOPPED · SPIN TO SCRUB' : speedPct + '%'}
+              {recording ? 'RECORDING · 100%' : !moving ? 'STOPPED · SPIN TO SCRUB' : speedX > PLAYABLE_X ? 'SPOOLING' : speedPct + '%'}
             </EngravedText>
           </GlassPanel>
         </View>
