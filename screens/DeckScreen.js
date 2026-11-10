@@ -33,9 +33,16 @@ const PLAYABLE_X = 2;
 const SLOWEST_X = 0.5;
 const CAPACITY = 2400; // seconds of tape on the reel (40 minutes)
 const MODES = { stop: 0, rec: NORMAL, rew: -MAXV, ff: MAXV };
-// The speeds the deck steps through with the hand off the reel. 100% is the tape
-// at its own speed, and the ends are the same range the reel allows by hand.
-const SPEEDS = [0.5, 0.75, 0.9, 1, 1.1, 1.25, 1.5, 2];
+// Fine controls, not presets: the speed moves one percent at a time across the
+// reel's whole range and the key five cents at a time, and both can be dragged
+// to anywhere in between.
+const SPEED_MIN = 0.5;
+const SPEED_MAX = 2;
+const SPEED_STEP = 0.01;
+const KEY_MIN = -12;
+const KEY_MAX = 12;
+const KEY_STEP = 0.05;
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
 const fmt = (s) => {
   const v = Math.max(0, s || 0);
@@ -104,10 +111,15 @@ export default function DeckScreen() {
   // How fast the tape runs when no hand is on the reel, and how far the take is
   // moved in key on top of that. `lock` decides whether a speed change keeps the
   // key (a speed changer) or bends it (a tape).
+  // `semis` is the key on the readout, `semisHeard` is the key the audio is at:
+  // a key change is rendered into the take, so the sound follows once the hand
+  // has settled instead of re-rendering on every pixel of a drag.
   const [speed, setSpeed] = useState(1);
   const [semis, setSemis] = useState(0);
+  const [semisHeard, setSemisHeard] = useState(0);
   const [lock, setLock] = useState(false);
   const speedRef = useRef(1);
+  const semisRef = useRef(0);
   const exportBusy = useRef(false);
 
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
@@ -161,7 +173,7 @@ export default function DeckScreen() {
       // A key change plays a pitched copy of the take, rendered once; until that
       // copy is ready the original keeps playing, so the tape never goes silent
       // for it while it renders.
-      semis ? { ...it, uri: shiftedUri(it.uri, semis) || it.uri } : it
+      semisHeard ? { ...it, uri: shiftedUri(it.uri, semisHeard) || it.uri } : it
     );
     safe(() => mixerRef.current.sync(items, p.pos, going, rate, lock));
   };
@@ -226,6 +238,7 @@ export default function DeckScreen() {
   useEffect(() => {
     return () => {
       if (phys.mode === 'rec') safe(() => (Platform.OS === 'web' ? stopMicTake() : recorder.stop()));
+      safe(() => stopRepeat());
       safe(() => mixerRef.current && mixerRef.current.dispose());
     };
     // eslint-disable-next-line
@@ -530,8 +543,10 @@ export default function DeckScreen() {
   const speedPct = Math.round(Math.min(PLAYABLE_X, Math.max(SLOWEST_X, speedX)) * 100);
   const moving = Math.abs(hud.vel) >= 1;
   // While the tape is running the reel is the truth, so the readout follows the
-  // hand; stopped, it shows the speed the deck is set to.
-  const speedLabel = mode === 'play' && moving ? speedPct + '%' : Math.round(speed * 100) + '%';
+  // hand; stopped, it shows the speed the deck is set to. Both are shown at the
+  // resolution they are set at — a percent and five cents.
+  const speedText = (Math.round(speed * 1000) % 10 === 0 ? String(Math.round(speed * 100)) : (speed * 100).toFixed(1)) + '%';
+  const keyText = (semis > 0 ? '+' : semis < 0 ? '−' : '') + Math.abs(semis).toFixed(2);
   const legend = legendMsg
     || (anyArmed
       ? 'REMAINING ' + fmtRem(CAPACITY - hud.pos) + ' · ' + sr + ' kHz · ' + (settings.float32 === false ? '24-BIT' : '32-BIT FLOAT')
@@ -541,21 +556,74 @@ export default function DeckScreen() {
   const spin = angleVal.interpolate({ inputRange: [-360, 360], outputRange: ['-360deg', '360deg'] });
   const px = (sec) => Math.max(0, Math.min(stripW, (sec / span) * stripW));
 
-  const stepSpeed = (dir) => {
-    Haptics.selectionAsync().catch(() => {});
-    const at = SPEEDS.findIndex((v) => Math.abs(v - speed) < 0.001);
-    const from = at < 0 ? SPEEDS.indexOf(1) : at;
-    const next = SPEEDS[Math.max(0, Math.min(SPEEDS.length - 1, from + dir))];
+  const setSpeedValue = (v) => {
+    let next = clamp(Math.round(v / SPEED_STEP) * SPEED_STEP, SPEED_MIN, SPEED_MAX);
+    if (Math.abs(next - 1) < 0.008) next = 1; // falls back onto the tape's own speed
+    next = Math.round(next * 100) / 100;
+    if (next === speedRef.current) return;
     speedRef.current = next;
     setSpeed(next);
-    flash('SPEED ' + Math.round(next * 100) + '%');
-  };
-  const stepKey = (dir) => {
     Haptics.selectionAsync().catch(() => {});
-    const next = Math.max(-12, Math.min(12, semis + dir));
-    setSemis(next);
-    flash(next === 0 ? 'KEY CENTRED' : 'KEY ' + (next > 0 ? '+' : '') + next + ' · SAME SPEED');
   };
+  const setKeyValue = (v) => {
+    let next = clamp(Math.round(v / KEY_STEP) * KEY_STEP, KEY_MIN, KEY_MAX);
+    if (Math.abs(next) < 0.03) next = 0; // falls back onto the take's own key
+    next = Math.round(next * 100) / 100;
+    if (next === semisRef.current) return;
+    semisRef.current = next;
+    setSemis(next);
+    Haptics.selectionAsync().catch(() => {});
+  };
+  const nudgeSpeed = (dir) => setSpeedValue(speedRef.current + dir * SPEED_STEP);
+  const nudgeKey = (dir) => setKeyValue(semisRef.current + dir * KEY_STEP);
+
+  // Holding an end repeats, so crossing the whole range is one press rather than
+  // a hundred taps.
+  const repeat = useRef(null);
+  const stopRepeat = () => {
+    if (repeat.current) {
+      clearInterval(repeat.current);
+      repeat.current = null;
+    }
+  };
+  const startRepeat = (fn) => {
+    fn();
+    stopRepeat();
+    repeat.current = setInterval(fn, 80);
+  };
+
+  // The audio follows the hand once it has stopped moving.
+  useEffect(() => {
+    const id = setTimeout(() => setSemisHeard(semis), 260);
+    return () => clearTimeout(id);
+  }, [semis]);
+
+  // Dragging a pill: a swipe across the width of the deck covers the whole range,
+  // which puts a single percent (or five cents) within a few pixels of the hand.
+  const dragFrom = useRef({ speed: 1, key: 0 }).current;
+  const finePan = (kind) =>
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderTerminationRequest: () => false,
+      onPanResponderGrant: () => {
+        dragFrom[kind] = kind === 'speed' ? speedRef.current : semisRef.current;
+        stopRepeat();
+      },
+      onPanResponderMove: (e, g) => {
+        const across = Math.max(120, W - 160);
+        const spread = kind === 'speed' ? SPEED_MAX - SPEED_MIN : KEY_MAX - KEY_MIN;
+        const next = dragFrom[kind] + (g.dx / across) * spread;
+        if (kind === 'speed') setSpeedValue(next);
+        else setKeyValue(next);
+      },
+    });
+  const speedPanRef = useRef(null);
+  if (!speedPanRef.current) speedPanRef.current = finePan('speed');
+  const speedPan = speedPanRef.current;
+  const keyPanRef = useRef(null);
+  if (!keyPanRef.current) keyPanRef.current = finePan('key');
+  const keyPan = keyPanRef.current;
   const toggleLock = () => {
     Haptics.selectionAsync().catch(() => {});
     const next = !lock;
@@ -677,20 +745,28 @@ export default function DeckScreen() {
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel="Slower"
-                hitSlop={12}
-                onPress={() => stepSpeed(-1)}
+                hitSlop={10}
+                onPressIn={() => startRepeat(() => nudgeSpeed(-1))}
+                onPressOut={stopRepeat}
                 style={s.pillStep}
               >
                 <Ionicons name="remove" size={16} color={recording ? t.accent : t.warning} />
               </Pressable>
-              <EngravedText size={12} color={recording ? t.accent : t.warning} style={{ minWidth: 64, textAlign: 'center' }}>
-                {recording ? 'REC · 100%' : moving && speedX > PLAYABLE_X ? 'SPOOLING' : speedLabel}
-              </EngravedText>
+              <View
+                {...speedPan.panHandlers}
+                style={s.pillValue}
+                accessibilityLabel={'Speed ' + speedText + ', drag to fine tune'}
+              >
+                <EngravedText size={12} color={recording ? t.accent : t.warning}>
+                  {recording ? 'REC · 100%' : moving && speedX > PLAYABLE_X ? 'SPOOLING' : speedText}
+                </EngravedText>
+              </View>
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel="Faster"
-                hitSlop={12}
-                onPress={() => stepSpeed(1)}
+                hitSlop={10}
+                onPressIn={() => startRepeat(() => nudgeSpeed(1))}
+                onPressOut={stopRepeat}
                 style={s.pillStep}
               >
                 <Ionicons name="add" size={16} color={recording ? t.accent : t.warning} />
@@ -700,21 +776,27 @@ export default function DeckScreen() {
             <GlassPanel radius={16} style={[s.pill, { borderColor: semis ? t.accent : glassStroke }]}>
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel="Lower the key by a semitone"
-                hitSlop={12}
-                onPress={() => stepKey(-1)}
+                accessibilityLabel="Lower the key"
+                hitSlop={10}
+                onPressIn={() => startRepeat(() => nudgeKey(-1))}
+                onPressOut={stopRepeat}
                 style={s.pillStep}
               >
                 <Ionicons name="remove" size={16} color={semis ? t.accent : t.warning} />
               </Pressable>
-              <EngravedText size={12} color={semis ? t.accent : t.warning} style={{ minWidth: 52, textAlign: 'center' }}>
-                {semis === 0 ? 'KEY 0' : 'KEY ' + (semis > 0 ? '+' : '') + semis}
-              </EngravedText>
+              <View
+                {...keyPan.panHandlers}
+                style={s.pillValue}
+                accessibilityLabel={'Key ' + keyText + ' semitones, drag to fine tune'}
+              >
+                <EngravedText size={12} color={semis ? t.accent : t.warning}>{'KEY ' + keyText}</EngravedText>
+              </View>
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel="Raise the key by a semitone"
-                hitSlop={12}
-                onPress={() => stepKey(1)}
+                accessibilityLabel="Raise the key"
+                hitSlop={10}
+                onPressIn={() => startRepeat(() => nudgeKey(1))}
+                onPressOut={stopRepeat}
                 style={s.pillStep}
               >
                 <Ionicons name="add" size={16} color={semis ? t.accent : t.warning} />
@@ -873,6 +955,7 @@ const s = StyleSheet.create({
   pillRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8, paddingHorizontal: 4 },
   pill: { height: 32, paddingHorizontal: 4, borderRadius: 16, borderWidth: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
   pillStep: { width: 28, height: 28, alignItems: 'center', justifyContent: 'center' },
+  pillValue: { minWidth: 62, height: 28, alignItems: 'center', justifyContent: 'center' },
   strip: { height: 64, marginHorizontal: 20, justifyContent: 'center' },
   stripBar: { height: 14, borderRadius: 3, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden' },
   playhead: { position: 'absolute', width: 2, height: 30, top: 14 },
