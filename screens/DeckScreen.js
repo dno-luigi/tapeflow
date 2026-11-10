@@ -405,13 +405,21 @@ export default function DeckScreen() {
     }
     if (recBusy.current) return;
     const armed = tracks.map((tr, i) => (tr.armed ? i : -1)).filter((i) => i >= 0);
-    if (armed.length === 0) {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
-      flash('ARM A TRACK FIRST');
-      shake.setValue(0);
-      Animated.sequence([6, -6, 4, -4, 0].map((v) => Animated.timing(shake, { toValue: v, duration: 50, useNativeDriver: true }))).start();
-      return;
+    // A four-track recorder layers, so pressing record has to land on a track and
+    // leave the others playing — never stop to ask for an arm first. If no track
+    // has been chosen, the take goes to the first one still empty.
+    let target = armed.length ? armed[0] : -1;
+    if (target < 0) {
+      const empty = tracks.map((tr, i) => ((tr.takes || []).length ? -1 : i)).filter((i) => i >= 0);
+      target = empty.length ? empty[0] : 0;
     }
+    // Exactly one record target. A pass that wrote over several tracks at once
+    // would wipe the very track it was supposed to play along with, which is how
+    // a layered take turns into silence.
+    armed.forEach((j) => {
+      if (j !== target) safe(() => studio.updateTrack && studio.updateTrack(j, { armed: false }));
+    });
+    if (!tracks[target].armed) safe(() => studio.updateTrack && studio.updateTrack(target, { armed: true }));
     if (phys.pos >= CAPACITY - 1) {
       flash('TAPE IS FULL');
       return;
@@ -460,7 +468,7 @@ export default function DeckScreen() {
     }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy).catch(() => {});
     phys.recStart = phys.pos;
-    phys.recTracks = armed;
+    phys.recTracks = [target];
     setRecFrom(phys.pos);
     toMode('rec');
   };
@@ -478,7 +486,7 @@ export default function DeckScreen() {
       return;
     }
     const armed = tracks.map((tr, i) => (tr.armed ? i : -1)).filter((i) => i >= 0);
-    const targets = armed.length ? armed : [0];
+    const targets = armed.length ? [armed[0]] : [0];
     let picked;
     try {
       picked = await pickAudioFile();
@@ -504,7 +512,15 @@ export default function DeckScreen() {
   const toggleArm = (i) => {
     Haptics.selectionAsync().catch(() => {});
     if (mode === 'rec') { flash('STOP BEFORE CHANGING ARMS'); return; }
-    if (typeof studio.updateTrack === 'function') safe(() => studio.updateTrack(i, { armed: !tracks[i].armed }));
+    if (typeof studio.updateTrack !== 'function') return;
+    const wasArmed = !!tracks[i].armed;
+    // One target at a time: arming a track lets go of the others, so a second
+    // pass lays over the first instead of muting it. This is the whole of
+    // layered recording — everything not being written keeps playing.
+    tracks.forEach((tr, j) => {
+      if (j !== i && tr.armed) safe(() => studio.updateTrack(j, { armed: false }));
+    });
+    safe(() => studio.updateTrack(i, { armed: !wasArmed }));
   };
 
   const dropCue = () => {
@@ -552,10 +568,19 @@ export default function DeckScreen() {
   // resolution they are set at — a percent and five cents.
   const speedText = (Math.round(speed * 1000) % 10 === 0 ? String(Math.round(speed * 100)) : (speed * 100).toFixed(1)) + '%';
   const keyText = (semis > 0 ? '+' : semis < 0 ? '−' : '') + Math.abs(semis).toFixed(2);
+  // While a pass is being made, say out loud what is being written and what is
+  // playing along: layering is invisible otherwise, and "nothing is playing"
+  // with no explanation is the failure that makes a recorder feel broken.
+  const recTarget = recording && phys.recTracks.length ? phys.recTracks[0] : -1;
+  const playAlong = recTarget >= 0
+    ? tracks.map((tr, i) => (i !== recTarget && (tr.takes || []).length ? i + 1 : 0)).filter((n) => n > 0)
+    : [];
   const legend = legendMsg
-    || (anyArmed
-      ? 'REMAINING ' + fmtRem(CAPACITY - hud.pos) + ' · ' + sr + ' kHz · ' + (settings.float32 === false ? '24-BIT' : '32-BIT FLOAT')
-      : 'ARM A TRACK, THEN PRESS REC');
+    || (recTarget >= 0
+      ? 'REC TRK ' + (recTarget + 1) + (playAlong.length ? ' · PLAYING TRK ' + playAlong.join(' + ') : ' · FIRST PASS')
+      : anyArmed
+        ? 'REMAINING ' + fmtRem(CAPACITY - hud.pos) + ' · ' + sr + ' kHz · ' + (settings.float32 === false ? '24-BIT' : '32-BIT FLOAT')
+        : 'TAP A TRACK TO RECORD ONTO IT');
   const active = moving || recording;
   const level = active ? Math.min(1, 0.4 + 0.3 * Math.abs(Math.sin(hud.pos * 6.3)) + 0.15 * Math.random() + Math.min(0.2, speedX * 0.03)) : 0;
   const spin = angleVal.interpolate({ inputRange: [-360, 360], outputRange: ['-360deg', '360deg'] });
@@ -903,7 +928,7 @@ export default function DeckScreen() {
               >
                 <Text style={[t.font.label, { color: armed ? t.onAccent : t.textMuted, fontSize: 13, lineHeight: 17 }]}>{'TRK ' + (i + 1)}</Text>
                 <Text style={[t.font.caption, { color: armed ? t.onAccent : t.textMuted, fontSize: 10, lineHeight: 13, opacity: 0.85 }]}>
-                  {armed ? 'ARMED' : n > 0 ? n + (n === 1 ? ' TAKE' : ' TAKES') : 'EMPTY'}
+                  {armed ? 'REC HERE' : n > 0 ? (anyArmed ? 'PLAYS' : n === 1 ? '1 TAKE' : n + ' TAKES') : 'EMPTY'}
                 </Text>
               </Pressable>
             );
