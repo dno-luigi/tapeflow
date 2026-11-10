@@ -130,11 +130,15 @@ export default function DeckScreen() {
   // runs in reverse. Beyond PLAYABLE_X the tape is just spooling.
   syncRef.current = () => {
     const p = phys;
-    const speed = p.vel / NORMAL; // signed: negative is rewind
+    const speed = p.vel / NORMAL; // signed: negative is backwards
     const live = p.mode === 'play' || p.mode === 'rec';
-    const going = live && speed > 0.05 && speed <= PLAYABLE_X;
+    const magnitude = Math.abs(speed);
+    // Stopped means silent, however the reel is turning: only a running tape is
+    // heard. Play, and the hand sets the speed in either direction.
+    const going = live && magnitude > 0.05 && magnitude <= PLAYABLE_X;
+    const rate = going ? (speed < 0 ? -1 : 1) * Math.max(0.05, Math.min(PLAYABLE_X, magnitude)) : 0;
     const items = buildItems(tracks, p.mode === 'rec' ? p.recTracks : []);
-    safe(() => mixerRef.current.sync(items, p.pos, going, Math.max(0.05, Math.min(PLAYABLE_X, speed))));
+    safe(() => mixerRef.current.sync(items, p.pos, going, rate));
   };
 
   // Stops the microphone and saves one take (with its audio file) per armed track.
