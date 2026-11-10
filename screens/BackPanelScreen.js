@@ -11,6 +11,7 @@ import { useStudio } from '../store/StudioContext';
 import { currentUser, onAuthChange, signOut, deleteAccount } from '../lib/auth';
 import { scheduleReminder, cancelReminder, askNotificationPermission } from '../lib/reminders';
 import EngravedText from '../components/EngravedText';
+import { ObsidianBackdrop } from '../ui/glass';
 import RotarySelector from '../components/RotarySelector';
 import ToggleSwitch from '../components/ToggleSwitch';
 
@@ -177,8 +178,7 @@ export default function BackPanelScreen() {
 
   return (
     <View style={{ flex: 1, backgroundColor: t.bg }} {...pan.panHandlers}>
-      <AppImage source={ART.rearPlate} contentFit="cover" style={StyleSheet.absoluteFill} />
-      <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(11,9,7,0.45)' }]} />
+      <ObsidianBackdrop />
       <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingTop: insets.top + 4, paddingBottom: insets.bottom + 24, paddingHorizontal: 20 }} showsVerticalScrollIndicator={false}>
         <View style={styles.top}>
           <View style={{ flex: 1 }}>

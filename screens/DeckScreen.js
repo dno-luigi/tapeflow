@@ -15,14 +15,20 @@ import EngravedText from '../components/EngravedText';
 import VUMeter from '../components/VUMeter';
 import { pickAudioFile, canImportAudio } from '../lib/audio/importTake';
 import { micUnavailableReason, startMicTake, stopMicTake } from '../lib/audio/recordTake';
+import { ObsidianBackdrop, GlassPanel, GlassSpecular, glassStroke, glassFill } from '../ui/glass';
+import GlassReel from '../components/GlassReel';
 
 // Wheel physics. One turn of the reel moves SEC_PER_REV seconds of tape at normal speed.
 const NORMAL = 120; // degrees per second at 1x play speed
 const SEC_PER_REV = 3;
 const MAXV = 1440; // 12x
-// Faster than this the tape is spooling rather than being played back, so the
-// sound drops out — the same thing a real reel does when you whip it.
-const PLAYABLE_X = 4;
+// The reel's varispeed range, the same one the field recorder it is modelled on
+// offers: half speed to double. Inside it the take bends in pitch with the hand,
+// which is the whole point of the wheel. Past it the tape is spooling rather than
+// being played, so the sound drops out — and half speed is as far down as the
+// sound goes, rather than smearing into mud.
+const PLAYABLE_X = 2;
+const SLOWEST_X = 0.5;
 const CAPACITY = 2400; // seconds of tape on the reel (40 minutes)
 const TARGET = { stop: 0, play: NORMAL, rec: NORMAL, rew: -MAXV, ff: MAXV };
 
@@ -135,8 +141,9 @@ export default function DeckScreen() {
     const magnitude = Math.abs(speed);
     // Stopped means silent, however the reel is turning: only a running tape is
     // heard. Play, and the hand sets the speed in either direction.
-    const going = live && magnitude > 0.05 && magnitude <= PLAYABLE_X;
-    const rate = going ? (speed < 0 ? -1 : 1) * Math.max(0.05, Math.min(PLAYABLE_X, magnitude)) : 0;
+    const going = live && magnitude > 0.12 && magnitude <= PLAYABLE_X;
+    const clamped = Math.min(PLAYABLE_X, Math.max(SLOWEST_X, magnitude));
+    const rate = going ? (speed < 0 ? -1 : 1) * clamped : 0;
     const items = buildItems(tracks, p.mode === 'rec' ? p.recTracks : []);
     safe(() => mixerRef.current.sync(items, p.pos, going, rate));
   };
@@ -375,7 +382,11 @@ export default function DeckScreen() {
           Alert.alert('The microphone cannot start', blocked.message);
           return;
         }
-        await startMicTake();
+        // Record at the rate and depth the back panel is set to, losslessly.
+        await startMicTake({
+          sampleRate: Number(settings.sampleRate) || 48000,
+          float32: settings.float32 !== false,
+        });
       } else {
         const perm = await AudioModule.requestRecordingPermissionsAsync();
         if (!perm || !perm.granted) {
@@ -483,6 +494,9 @@ export default function DeckScreen() {
   const recording = mode === 'rec';
   const display = Math.max(0, hud.pos - offset);
   const speedX = Math.abs(hud.vel) / NORMAL;
+  // Read the wheel out as a speed adjuster, the way the recorder it is modelled
+  // on does: 100% is the tape at its own speed, 50% is half and 200% is double.
+  const speedPct = Math.round(speedX * 100);
   const moving = Math.abs(hud.vel) >= 1;
   const legend = legendMsg
     || (anyArmed
@@ -494,21 +508,24 @@ export default function DeckScreen() {
   const px = (sec) => Math.max(0, Math.min(stripW, (sec / span) * stripW));
 
   const key = (icon, onPress, label, on) => (
-    <Pressable
-      key={label}
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      onPress={onPress}
-      style={({ pressed }) => [s.key, { backgroundColor: t.surface, borderColor: on ? t.warning : t.border, opacity: pressed ? 0.7 : 1 }]}
-    >
-      <Ionicons name={icon} size={28} color={on ? t.warning : t.text} />
-    </Pressable>
+    <GlassPanel key={label} radius={12} style={[s.keyShell, { borderColor: on ? t.warning : glassStroke }]}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={label}
+        onPress={onPress}
+        style={({ pressed }) => [s.keyInner, { opacity: pressed ? 0.6 : 1 }]}
+      >
+        <Ionicons name={icon} size={28} color={on ? t.warning : t.text} />
+        {on ? <View style={{ position: 'absolute', bottom: 7, width: 20, height: 2, borderRadius: 2, backgroundColor: t.warning }} /> : null}
+      </Pressable>
+    </GlassPanel>
   );
 
   return (
     <View style={{ flex: 1, backgroundColor: t.bg }} {...swipe.panHandlers}>
       <StatusBar barStyle="light-content" translucent backgroundColor="transparent" />
-      <AppImage source={ART.deckPlate} contentFit="cover" style={StyleSheet.absoluteFill} />
+      {/* Obsidian glass ground: the deck is a slab, not a photograph. */}
+      <ObsidianBackdrop />
       <View style={{ flex: 1, paddingTop: insets.top, paddingBottom: insets.bottom + 4 }}>
         {/* Top bar */}
         <View style={s.top}>
@@ -533,15 +550,15 @@ export default function DeckScreen() {
 
         {/* Counter and level */}
         <View style={s.readout}>
-          <View style={[s.counter, { borderColor: recording ? t.accent : t.border, backgroundColor: t.bg }]}>
+          <GlassPanel radius={10} style={[s.counter, { borderColor: recording ? t.accent : glassStroke }]}>
             <Text style={[t.font.title, { color: recording ? t.accent : t.warning, fontSize: 30, lineHeight: 40, letterSpacing: 1 }]}>{fmt(display)}</Text>
             <Pressable
               accessibilityLabel="Reset tape counter, hold"
               hitSlop={14}
               onLongPress={() => { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {}); setOffset(hud.pos); flash('COUNTER RESET'); }}
-              style={[s.pinhole, { backgroundColor: t.border }]}
+              style={[s.pinhole, { backgroundColor: glassStroke }]}
             />
-          </View>
+          </GlassPanel>
           <VUMeter width={112} height={56} level={level} label="IN" />
         </View>
 
@@ -559,14 +576,17 @@ export default function DeckScreen() {
                   width: size,
                   height: size,
                   borderRadius: size / 2,
-                  backgroundColor: t.bg,
-                  opacity: 0.85,
-                  borderWidth: grabbed ? 2 : StyleSheet.hairlineWidth,
-                  borderColor: grabbed ? t.warning : t.border,
+                  backgroundColor: glassFill,
+                  borderWidth: grabbed ? 2 : 1,
+                  borderColor: grabbed ? t.warning : glassStroke,
                 }}
               />
-              <AppImage source={ART.reelFull} contentFit="contain" style={{ width: size * 0.88, height: size * 0.88 }} />
+              <GlassReel size={size * 0.9} accent={t.accent} />
               <Bezel size={size} color={t.textMuted} accent={t.accent} />
+              {/* A lens, not a hole: one specular sweep across the glass. */}
+              <GlassSpecular
+                style={{ position: 'absolute', left: size * 0.07, top: size * 0.07, width: size * 0.86, height: size * 0.86, borderRadius: size * 0.43 }}
+              />
             </Animated.View>
             <View pointerEvents="none" style={[s.notch, { left: size / 2 - 8 }]}>
               <Svg width={16} height={14} viewBox="0 0 16 14">
@@ -574,16 +594,16 @@ export default function DeckScreen() {
               </Svg>
             </View>
           </View>
-          <View style={[s.speedPill, { borderColor: recording ? t.accent : t.border, backgroundColor: t.bg }]}>
+          <GlassPanel radius={16} style={[s.speedPill, { borderColor: recording ? t.accent : glassStroke }]}>
             <Ionicons
               name={!moving ? 'pause' : hud.vel > 0 ? 'play' : 'play-back'}
               size={14}
               color={recording ? t.accent : t.warning}
             />
             <EngravedText size={12} color={recording ? t.accent : t.warning} style={{ marginLeft: 6 }}>
-              {recording ? 'RECORDING · 1.0X' : !moving ? 'STOPPED · SPIN TO SCRUB' : (hud.vel < 0 ? '-' : '') + speedX.toFixed(1) + 'X'}
+              {recording ? 'RECORDING · 100%' : !moving ? 'STOPPED · SPIN TO SCRUB' : speedPct + '%'}
             </EngravedText>
-          </View>
+          </GlassPanel>
         </View>
 
         {/* Tape strip: the whole recording, tap to jump */}
@@ -637,8 +657,8 @@ export default function DeckScreen() {
                 style={({ pressed }) => [
                   s.arm,
                   {
-                    backgroundColor: armed ? t.accent : t.accentSoft,
-                    borderColor: armed ? t.accent : t.border,
+                    backgroundColor: armed ? t.accent : glassFill,
+                    borderColor: armed ? t.accent : glassStroke,
                     shadowColor: t.accent,
                     shadowOpacity: armed ? 0.8 : 0,
                     shadowRadius: 10,
@@ -688,7 +708,20 @@ export default function DeckScreen() {
               },
             ]}
           >
-            <AppImage source={ART.recordKey} contentFit="contain" style={{ width: 44, height: 44, opacity: recording || anyArmed ? 1 : 0.5 }} />
+            {/* The record key is a lamp, not a picture of one. */}
+            <View
+              style={{
+                width: 18,
+                height: 18,
+                borderRadius: 9,
+                backgroundColor: recording ? '#FFFFFF' : t.onAccent,
+                opacity: recording || anyArmed ? 1 : 0.45,
+                shadowColor: t.accent,
+                shadowOpacity: recording ? 1 : 0.7,
+                shadowRadius: recording ? 14 : 8,
+                shadowOffset: { width: 0, height: 0 },
+              }}
+            />
           </Pressable>
           {key('play-forward', onFF, 'Fast forward', mode === 'ff')}
         </Animated.View>
@@ -717,4 +750,6 @@ const s = StyleSheet.create({
   cueKey: { width: 56, borderRadius: 8, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   transport: { flexDirection: 'row', height: 64, marginHorizontal: 12, gap: 6, marginTop: 8 },
   key: { flex: 1, height: 64, borderRadius: 10, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  keyShell: { flex: 1, height: 64 },
+  keyInner: { height: 64, minWidth: 44, alignItems: 'center', justifyContent: 'center' },
 });

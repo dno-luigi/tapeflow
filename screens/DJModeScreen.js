@@ -9,6 +9,7 @@ import { ART } from '../constants/artwork';
 import RubberKey from '../components/RubberKey';
 import EngravedText from '../components/EngravedText';
 import NavBar from '../components/NavBar';
+import GlassReel from '../components/GlassReel';
 import { engine } from '../lib/audio/AudioEngine';
 import { createMixer, buildItems } from '../lib/audio/TapeMixer';
 import { useStudio } from '../store/StudioContext';
@@ -57,7 +58,7 @@ function Platter({ size, angle, onDelta, onRelease }) {
   return (
     <View style={{ width: size, height: size }} {...pan.panHandlers}>
       <View pointerEvents="none" style={{ width: size, height: size, transform: [{ rotate: angle + 'deg' }] }}>
-        <AppImage source={ART.reelFull} contentFit="contain" style={{ width: size, height: size }} />
+        <GlassReel size={size} accent={t.accent} />
       </View>
     </View>
   );

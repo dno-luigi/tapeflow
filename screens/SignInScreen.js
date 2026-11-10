@@ -17,6 +17,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useTheme } from '../ui/theme';
 import { AppImage } from '../ui/kit';
+import { ObsidianBackdrop } from '../ui/glass';
 // (Sign In is reached from Welcome and from the Back Panel account plate.)
 import { ART } from '../constants/artwork';
 import NavBar from '../components/NavBar';
@@ -86,11 +87,7 @@ export default function SignInScreen() {
 
   return (
     <View style={{ flex: 1, backgroundColor: t.bg }}>
-      <AppImage source={ART.rearPlate} contentFit="cover" style={StyleSheet.absoluteFill} />
-      <View
-        pointerEvents="none"
-        style={[StyleSheet.absoluteFill, { backgroundColor: t.bg, opacity: 0.82 }]}
-      />
+      <ObsidianBackdrop />
       <View style={{ paddingTop: insets.top }}>
         <NavBar title="Account" onBack={goBack} />
       </View>

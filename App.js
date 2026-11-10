@@ -63,7 +63,10 @@ export default function App() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
-        <ThemeProvider theme="mono" dark={true} bg="#0B0907" surface="#1A1714" text="#EDE6DB" textMuted="#A89F94" border="#332D27" success="#7FD18B" warning="#FFB347" danger="#FF2A1F" accent="#FF2A1F" accentSoft="#3A1411" accents={["#FFB347","#C9B79C","#6E665D","#26211D","#E8D9B8"]}>
+        {/* Machined graphite, one orange lamp. Nothing in the palette is a colour
+            for its own sake: the ground is neutral black, the surfaces are
+            translucent white at low opacity, and red-orange is the record light. */}
+        <ThemeProvider theme="mono" dark={true} bg="#08090B" surface="rgba(255,255,255,0.048)" surfaceAlt="rgba(255,255,255,0.085)" text="#F1F3F6" textMuted="#8C9199" border="rgba(255,255,255,0.10)" success="#5EEAD4" warning="#E8A33D" danger="#FF4A1C" accent="#FF4A1C" accentSoft="rgba(255,74,28,0.14)" accents={["#FF4A1C","#E8A33D","#C9CED6","#9AA1AA","#7F868F","#5C636C"]}>
           <WebPhone>
             <AppStoreProvider>
               <Root />
