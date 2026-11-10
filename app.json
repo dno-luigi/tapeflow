@@ -1,24 +1,24 @@
 {
   "expo": {
-    "name": "• Type: Mobile 4-track tape recorder and",
-    "slug": "type-mobile-4-track-tape-recor",
+    "name": "TapeFlow",
+    "slug": "tapeflow",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
     "splash": {
-      "backgroundColor": "#000000"
+      "backgroundColor": "#0B0907"
     },
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.wron.app0ki0vcbzs2",
+      "bundleIdentifier": "app.tapeflow.recorder",
       "deploymentTarget": "16.4"
     },
     "android": {
-      "adaptiveIcon": {
-        "backgroundColor": "#000000"
-      },
-      "package": "com.wron.app0ki0vcbzs2"
+      "package": "app.tapeflow.recorder"
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "single"
     },
     "plugins": [
       [

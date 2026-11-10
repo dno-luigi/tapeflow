@@ -1,0 +1,28 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "tapeflow",
+  "main": "worker/index.js",
+  "compatibility_date": "2026-11-01",
+
+  // The Expo web build (npm run build:web) lands here. The Worker is always
+  // invoked first so it can answer /api/*, then hands everything else to
+  // ASSETS; not_found_handling makes deep links fall back to the app shell.
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application"
+  },
+
+  "observability": {
+    "enabled": true
+  },
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "tapeflow",
+      // Replace with the id `npx wrangler d1 create tapeflow` prints.
+      "database_id": "REPLACE_WITH_D1_DATABASE_ID"
+    }
+  ]
+}

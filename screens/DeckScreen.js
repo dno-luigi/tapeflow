@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Pressable, Text, StatusBar, Alert, Animated, PanResponder, useWindowDimensions, StyleSheet } from 'react-native';
+import { View, Pressable, Text, StatusBar, Alert, Animated, PanResponder, Platform, useWindowDimensions, StyleSheet } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
@@ -13,6 +13,7 @@ import { useStudio } from '../store/StudioContext';
 import { createMixer, buildItems } from '../lib/audio/TapeMixer';
 import EngravedText from '../components/EngravedText';
 import VUMeter from '../components/VUMeter';
+import { pickAudioFile, canImportAudio } from '../lib/audio/importTake';
 
 // Wheel physics. One turn of the reel moves SEC_PER_REV seconds of tape at normal speed.
 const NORMAL = 120; // degrees per second at 1x play speed
@@ -340,14 +341,31 @@ export default function DeckScreen() {
     try {
       const perm = await AudioModule.requestRecordingPermissionsAsync();
       if (!perm || !perm.granted) {
-        Alert.alert('Microphone is off', 'Allow microphone access for this app in Settings to record sound.');
+        // On the web this means the browser gave the page no input device (or it
+        // was refused), which is a dead end for the mic but not for the deck:
+        // the upload key takes audio from a file instead.
+        // The legend carries it too: on the web an Alert can be swallowed, and a
+        // record key that does nothing is the worst way to learn this.
+        flash(Platform.OS === 'web' ? 'NO MICROPHONE · IMPORT A FILE INSTEAD' : 'MICROPHONE IS OFF');
+        Alert.alert(
+          'Microphone is off',
+          Platform.OS === 'web'
+            ? 'This browser gave the page no microphone, so there is nothing to record from. Allow it in the address bar and try again, or bring audio in with the upload key at the top of the deck.'
+            : 'Allow microphone access for this app in Settings to record sound.',
+        );
         return;
       }
       await setAudioModeAsync({ playsInSilentMode: true, allowsRecording: true });
       await recorder.prepareToRecordAsync();
       recorder.record();
     } catch (e) {
-      Alert.alert('Could not start recording', (e && e.message) || 'Check the microphone and try again.');
+      // Say what the browser actually refused with. "Could not start recording"
+      // on its own leaves nothing to act on, and on the web there is no console
+      // in front of most people.
+      const why = String((e && e.message) || 'unknown error');
+      flash('COULD NOT START RECORDING · ' + why.slice(0, 46).toUpperCase());
+      console.error('[deck] could not start recording', e);
+      Alert.alert('Could not start recording', why);
       return;
     } finally {
       recBusy.current = false;
@@ -357,6 +375,42 @@ export default function DeckScreen() {
     phys.recTracks = armed;
     setRecFrom(phys.pos);
     toMode('rec');
+  };
+
+  // Audio off a file rather than off a microphone: the take lands at the tape
+  // head on every armed track (or track 1 if none is armed), and from there it
+  // behaves exactly like a recording.
+  const onImport = async () => {
+    if (mode === 'rec') {
+      flash('STOP RECORDING FIRST');
+      return;
+    }
+    if (phys.pos >= CAPACITY - 1) {
+      flash('TAPE IS FULL');
+      return;
+    }
+    const armed = tracks.map((tr, i) => (tr.armed ? i : -1)).filter((i) => i >= 0);
+    const targets = armed.length ? armed : [0];
+    let picked;
+    try {
+      picked = await pickAudioFile();
+    } catch (e) {
+      if (e && e.code === 'cancelled') return;
+      flash('COULD NOT READ THAT FILE');
+      Alert.alert('Could not read that file', (e && e.message) || 'Try another audio file.');
+      return;
+    }
+    const left = Math.max(0, CAPACITY - phys.pos);
+    // One decimal, not whole seconds: a two-second imported take should stop
+    // where the audio stops, not up to a second past it.
+    const length = Math.min(Math.max(0.5, Math.round((picked.duration || 30) * 10) / 10), Math.max(0.5, Math.round(left * 10) / 10));
+    try {
+      targets.forEach((i) => studio.addTake && studio.addTake(i, length, undefined, { uri: picked.uri, start: phys.pos }));
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+      flash('TAKE SAVED · ' + fmtShort(length));
+    } catch (e) {
+      Alert.alert('Could not save the take', (e && e.message) || 'Try again.');
+    }
   };
 
   const toggleArm = (i) => {
@@ -434,6 +488,11 @@ export default function DeckScreen() {
               {(current && current.name) || 'Reel'}
             </EngravedText>
           </Pressable>
+          {canImportAudio() ? (
+            <Pressable onPress={onImport} accessibilityRole="button" accessibilityLabel="Import an audio file as a take" style={s.topBtn}>
+              <Ionicons name="cloud-upload-outline" size={22} color={t.textMuted} />
+            </Pressable>
+          ) : null}
           <Pressable onPress={() => nav.navigate('DJ Mode')} accessibilityRole="button" accessibilityLabel="Open DJ mode" style={s.topBtn}>
             <Ionicons name="options" size={22} color={t.textMuted} />
           </Pressable>

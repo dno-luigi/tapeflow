@@ -8,8 +8,8 @@ import { useTheme } from '../ui/theme';
 import { AppImage } from '../ui/kit';
 import { ART } from '../constants/artwork';
 import { useStudio } from '../store/StudioContext';
-import { currentUser, onAuthChange, signOut, deleteAccount } from '../lib/wron-auth';
-import { scheduleReminder, cancelReminder, askNotificationPermission } from '../lib/wron-ai';
+import { currentUser, onAuthChange, signOut, deleteAccount } from '../lib/auth';
+import { scheduleReminder, cancelReminder, askNotificationPermission } from '../lib/reminders';
 import EngravedText from '../components/EngravedText';
 import RotarySelector from '../components/RotarySelector';
 import ToggleSwitch from '../components/ToggleSwitch';
@@ -122,7 +122,7 @@ export default function BackPanelScreen() {
       try { ok = await askNotificationPermission(); } catch (e) { ok = false; }
       if (!ok) {
         updateSettings && updateSettings({ reminderOn: false });
-        Alert.alert('Notifications are off for Wron. Turn them on in Settings.');
+        Alert.alert('Notifications are off for TapeFlow. Turn them on in Settings.');
         return;
       }
     }
@@ -159,12 +159,6 @@ export default function BackPanelScreen() {
         try { await deleteAccount(); } catch (err) { Alert.alert('Could not delete account', err?.message || 'Try again.'); }
       } },
     ]);
-  };
-
-  const openPrivacy = () => {
-    Linking.openURL('https://www.wron.ai/p/078e594ef042751312650f5968f12c51/privacy').catch(() => {
-      Alert.alert('Could not open the privacy policy', 'Try again in a moment.');
-    });
   };
 
   const legend = input === 'USB-C'
@@ -309,10 +303,6 @@ export default function BackPanelScreen() {
             <Text style={[t.font.label, { fontSize: 15, lineHeight: 20, color: t.danger }]}>Delete account</Text>
           </Pressable>
         ) : null}
-
-        <Pressable onPress={openPrivacy} accessibilityRole="link" style={[styles.textBtn, { alignSelf: 'flex-start', marginTop: 8 }]}>
-          <Text style={[t.font.label, { fontSize: 15, lineHeight: 20, color: t.textMuted }]}>Privacy Policy</Text>
-        </Pressable>
       </ScrollView>
 
       <Modal visible={timeOpen} transparent animationType="slide" onRequestClose={() => setTimeOpen(false)}>

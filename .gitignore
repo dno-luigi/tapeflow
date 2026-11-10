@@ -1,0 +1,12 @@
+# Build output and local tooling state are not source.
+node_modules/
+dist/
+.expo/
+.wrangler/
+artifacts/
+*.log
+
+# Local secrets. Nothing here should ever be committed.
+.env
+.env.local
+.dev.vars

@@ -1,0 +1,64 @@
+name: Build and deploy to Cloudflare
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudflare-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build the Expo web app
+        run: npm run build:web
+
+      # Idempotent: db/schema.sql uses CREATE TABLE IF NOT EXISTS.
+      - name: Apply the D1 schema
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: d1 execute tapeflow --remote --file=db/schema.sql
+
+      - name: Deploy the Worker
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy
+
+      - name: Smoke test /api/health
+        run: |
+          url="${{ vars.TAPEFLOW_URL }}"
+          if [ -z "$url" ]; then
+            echo "vars.TAPEFLOW_URL is not set; skipping the smoke test."
+            exit 0
+          fi
+          for attempt in 1 2 3 4 5; do
+            if curl -fsS "$url/api/health" | grep -q '"ok":true'; then
+              echo "API is healthy."
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "API did not answer /api/health."
+          exit 1

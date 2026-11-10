@@ -63,4 +63,55 @@ if (ShimPlatform.OS === 'web') {
   }
 }
 
+// ── Alerts on the web ───────────────────────────────────────────────────────
+// react-native-web's Alert is `static alert() {}` — a no-op. Every confirmation
+// and every error in this app (delete a session, sign out, "could not start
+// recording", a sign-in failure) therefore did nothing at all in a browser, and
+// a button that fails silently is indistinguishable from a broken app.
+//
+// This maps them onto the browser's own dialogs: a lone button acknowledges,
+// and a dialog that offers a cancel plus something destructive becomes a
+// confirm so the destructive action only runs when it is agreed to.
+if (ShimPlatform.OS === 'web') {
+  try {
+    const { Alert } = require('react-native');
+    if (Alert && typeof Alert.alert === 'function') {
+      Alert.alert = function (title, message, buttons, options) {
+        const list = Array.isArray(buttons) ? buttons : [];
+        const text = [title, message].filter(Boolean).join('\n\n');
+
+        const choose = (button) => {
+          if (button && typeof button.onPress === 'function') {
+            try { button.onPress(); } catch (e) { /* the dialog was shown; the handler is the app's problem */ }
+          }
+        };
+
+        if (list.length <= 1) {
+          try { globalThis.alert(text); } catch (e) {}
+          choose(list[0]);
+          return;
+        }
+
+        const destructive = list.find((b) => b && b.style === 'destructive');
+        const cancel = list.find((b) => b && b.style === 'cancel');
+        const action = destructive || list.find((b) => b && b.style !== 'cancel');
+        const confirmLabel = (action && action.text) || 'OK';
+        let agreed = false;
+        try {
+          agreed = globalThis.confirm(text + '\n\nPress OK to ' + confirmLabel + '.');
+        } catch (e) {
+          agreed = false;
+        }
+        if (agreed) choose(action);
+        else choose(cancel);
+        if (!agreed && !cancel && options && typeof options.onDismiss === 'function') {
+          try { options.onDismiss(); } catch (e) {}
+        }
+      };
+    }
+  } catch (e) {
+    /* Alert stays a no-op if react-native cannot be required here */
+  }
+}
+
 

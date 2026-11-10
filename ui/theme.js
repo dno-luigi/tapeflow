@@ -4,57 +4,6 @@ import { View as KitRootView, Text as KitText, Pressable as KitPressable } from 
 import * as KitFontLoader from 'expo-font';
 import { FONTS } from './fonts';
 
-// ── Preview crash telemetry ─────────────────────────────────────────────────
-// Every generated app imports this module, so this runs once at app start.
-// In PREVIEW contexts only (__DEV__: Snack player, Expo Go via QR) it reports
-// uncaught errors and unhandled rejections back to Wron, so a failure on a
-// user's phone is seen by the platform instead of only by the user. Release
-// builds (__DEV__ false: TestFlight, App Store) never report. Every line is
-// guarded — this must be inert in any environment that lacks the pieces.
-(() => {
-  try {
-    if (typeof __DEV__ === 'undefined' || !__DEV__) return;
-    if (typeof fetch !== 'function') return;
-    const seen = new Set(); let sent = 0;
-    const report = (msg, stack, fatal) => {
-      try {
-        const key = String(msg == null ? 'unknown error' : msg).slice(0, 300);
-        if (seen.has(key) || sent >= 5) return;
-        seen.add(key); sent += 1;
-        fetch('https://www.wron.ai/api/preview-error', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            chatId: "chat-1793972340836",
-            message: key,
-            stack: String(stack || '').slice(0, 1500),
-            fatal: !!fatal,
-            platform: (typeof navigator !== 'undefined' && navigator.product === 'ReactNative') ? 'native' : 'web',
-          }),
-        }).catch(() => {});
-      } catch (e) {}
-    };
-    // The screen boundary below reports through the same channel.
-    try { globalThis.__wronReportPreviewError = report; } catch (e) {}
-    if (typeof ErrorUtils !== 'undefined' && ErrorUtils && ErrorUtils.getGlobalHandler) {
-      const prev = ErrorUtils.getGlobalHandler();
-      ErrorUtils.setGlobalHandler((e, isFatal) => {
-        // The native-host shim drops one known-spurious error (see ui/native-shim.js);
-        // do not report it, just hand it down so the shim can swallow it.
-        if (typeof globalThis !== 'undefined' && typeof globalThis.__wronIsSpuriousError === 'function' && globalThis.__wronIsSpuriousError(e)) { if (typeof prev === 'function') prev(e, isFatal); return; }
-        report(e && e.message ? e.message : e, e && e.stack, isFatal);
-        if (typeof prev === 'function') prev(e, isFatal);
-      });
-    }
-    if (typeof globalThis !== 'undefined' && typeof globalThis.addEventListener === 'function') {
-      globalThis.addEventListener('unhandledrejection', (ev) => {
-        const r = ev && ev.reason;
-        report('Unhandled promise rejection: ' + (r && r.message ? r.message : String(r)), r && r.stack, false);
-      });
-    }
-  } catch (e) {}
-})();
-
 // ── Themes ──────────────────────────────────────────────────────────────────
 // Each theme is a complete palette. accents[] drives category colors, chart
 // bars, avatars, tag chips — the "no monochrome apps" rule made concrete.
@@ -337,13 +286,10 @@ export class ScreenBoundary extends React.Component {
       const name = this.props.name || 'screen';
       const message = String(error && error.message ? error.message : error).slice(0, 300);
       const stack = String((error && error.stack) || '') + (info && info.componentStack ? '\n' + String(info.componentStack).slice(0, 600) : '');
-      const rep = typeof globalThis !== 'undefined' ? globalThis.__wronReportPreviewError : null;
-      if (typeof rep === 'function') rep('Screen "' + name + '" crashed: ' + message, stack, false);
-      // In the web preview the builder page listens for this and shows its
-      // "preview crashed" banner with the fix button, exactly as for a red screen.
-      if (typeof window !== 'undefined' && window.parent && window.parent !== window && typeof window.parent.postMessage === 'function') {
-        window.parent.postMessage({ type: 'wron:screen-crash', screen: name, message: message, stack: stack.slice(0, 1200) }, '*');
-      }
+      // The boundary catches, so the rest of the app survives; this is the one
+      // record of the failure. (The WRON preview reporter that used to post it
+      // to wron.ai is gone with the rest of that backend.)
+      console.error('[screen] ' + name + ' crashed: ' + message, stack);
     } catch (e) {}
   }
   retry() { this.setState({ error: null }); }

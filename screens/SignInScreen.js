@@ -20,11 +20,9 @@ import { AppImage } from '../ui/kit';
 // (Sign In is reached from Welcome and from the Back Panel account plate.)
 import { ART } from '../constants/artwork';
 import NavBar from '../components/NavBar';
-import * as wronAuth from '../lib/wron-auth';
-
-const { signIn, signUp } = wronAuth;
-const googleSignIn = wronAuth.signInWithGoogle || wronAuth.signInGoogle || wronAuth.googleSignIn;
-const appleSignIn = wronAuth.signInWithApple;
+// Email + password, against our own Worker (worker/index.js). The Google and
+// Apple buttons were backed by WRON's OAuth broker and are gone with it.
+import { signIn, signUp } from '../lib/auth';
 
 export default function SignInScreen() {
   const t = useTheme();
@@ -74,27 +72,6 @@ export default function SignInScreen() {
         } else {
           Alert.alert("That email and password don't match.");
         }
-      }
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const runProvider = async (fn, label) => {
-    if (typeof fn !== 'function') {
-      Alert.alert(label + ' sign-in unavailable', 'Try again in a moment.');
-      return;
-    }
-    setBusy(true);
-    try {
-      const res = await fn();
-      if (res && res.cancelled) return;
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
-      openDeck();
-    } catch (err) {
-      const msg = (err && err.message) || 'Try again in a moment.';
-      if (!(err && (err.code === 'ERR_REQUEST_CANCELED' || err.cancelled))) {
-        Alert.alert('Could not sign in with ' + label, msg);
       }
     } finally {
       setBusy(false);
@@ -159,42 +136,6 @@ export default function SignInScreen() {
             Sign in and your sessions follow you to a new phone. Recording works fine without it.
           </Text>
 
-          <Pressable
-            onPress={() => runProvider(googleSignIn, 'Google')}
-            disabled={busy}
-            accessibilityRole="button"
-            accessibilityLabel="Continue with Google"
-            style={({ pressed }) => [
-              styles.provider,
-              { backgroundColor: t.accents[3], borderColor: t.border, opacity: pressed || busy ? 0.7 : 1 },
-            ]}
-          >
-            <Ionicons name="logo-google" size={20} color={t.text} style={{ marginRight: 10 }} />
-            <Text style={[t.font.label, { color: t.text, fontSize: 16, lineHeight: 21 }]}>Continue with Google</Text>
-          </Pressable>
-
-          {Platform.OS === 'ios' ? (
-            <Pressable
-              onPress={() => runProvider(appleSignIn, 'Apple')}
-              disabled={busy}
-              accessibilityRole="button"
-              accessibilityLabel="Sign in with Apple"
-              style={({ pressed }) => [
-                styles.provider,
-                { backgroundColor: t.accents[3], borderColor: t.border, marginTop: 12, opacity: pressed || busy ? 0.7 : 1 },
-              ]}
-            >
-              <Ionicons name="logo-apple" size={22} color={t.text} style={{ marginRight: 10 }} />
-              <Text style={[t.font.label, { color: t.text, fontSize: 16, lineHeight: 21 }]}>Sign in with Apple</Text>
-            </Pressable>
-          ) : null}
-
-          <View style={styles.divider}>
-            <View style={[styles.dividerLine, { backgroundColor: t.border }]} />
-            <Text style={[t.font.caption, { color: t.textMuted, letterSpacing: 1.5, marginHorizontal: 12 }]}>OR</Text>
-            <View style={[styles.dividerLine, { backgroundColor: t.border }]} />
-          </View>
-
           <TextInput
             value={email}
             onChangeText={setEmail}
@@ -223,7 +164,7 @@ export default function SignInScreen() {
             />
             <Pressable
               onPress={() => setShowPw(!showPw)}
-              accessibilityLabel={showPw ? 'Hide password' : 'WRON_SECRET_REMOVED'}
+              accessibilityLabel={showPw ? 'Hide password' : 'Show password'}
               style={styles.eye}
             >
               <Ionicons name={showPw ? 'eye-off-outline' : 'eye-outline'} size={22} color={t.textMuted} />
@@ -293,20 +234,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     overflow: 'hidden',
   },
-  provider: {
-    height: 56,
-    borderRadius: 14,
-    borderWidth: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  divider: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginVertical: 20,
-  },
-  dividerLine: { flex: 1, height: StyleSheet.hairlineWidth },
   primary: {
     height: 56,
     borderRadius: 14,
