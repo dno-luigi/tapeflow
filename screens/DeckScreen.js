@@ -204,7 +204,10 @@ export default function DeckScreen() {
         uri = null;
       }
       safe(() => setAudioModeAsync({ playsInSilentMode: true, allowsRecording: false }).catch(() => {}));
-      if (dur < 1) {
+      // A dub can be short: a drum stab or a single word is the point of layering
+      // a part, and a whole second of minimum threw those away. This still
+      // ignores a tap that was never meant to record anything.
+      if (dur < 0.4) {
         flash('TOO SHORT · NOTHING SAVED');
         return;
       }
