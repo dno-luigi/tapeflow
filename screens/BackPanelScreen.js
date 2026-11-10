@@ -240,6 +240,11 @@ export default function BackPanelScreen() {
         <Section title="TAPE" t={t}>
           <ToggleSwitch label="MASTER TAPE SOUND" value={masterTape} helper="Adds saturation, hiss and flutter. Off is clean."
             onValueChange={(v) => { buzz(); updateSettings && updateSettings({ masterTape: v }); }} />
+          <View style={{ marginTop: 12 }}>
+            <ToggleSwitch label="BOUNCE · PRINT THE MUSIC" value={!!settings.bounce}
+              helper="Records the playing tracks into the take, so a pass stands on its own. Those tracks are left out while it plays."
+              onValueChange={(v) => { buzz(); updateSettings && updateSettings({ bounce: v }); }} />
+          </View>
           <View style={[styles.rowCenter, { marginTop: 12, justifyContent: 'space-between' }]}>
             {[0, 1, 2, 3].map((i) => (
               <View key={i} style={{ flex: 1, alignItems: 'center' }}>

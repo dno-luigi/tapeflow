@@ -11,6 +11,9 @@ const DEFAULT_SETTINGS = {
   // the one format a browser's own player can refuse to play, and a track that
   // plays silence is worse than a track with two bits fewer.
   float32: false,
+  // Off by default: a bounce prints the music into the take, which is right when a
+  // pass has to stand on its own and wrong while the tracks are still being edited.
+  bounce: false,
   masterTape: false,
   reminderOn: false,
   reminderTime: { hour: 19, minute: 0 },
@@ -343,6 +346,9 @@ export function StudioProvider({ children }) {
             // The peak the microphone actually delivered, so a take that captured
             // nothing can say so instead of looking like a take.
             peak: typeof info.peak === 'number' ? info.peak : null,
+            // The tracks a bounce printed into this take. They stay out of the mix
+            // while it plays, so the backing is heard once and not twice.
+            sources: Array.isArray(info.sources) && info.sources.length ? info.sources.slice() : null,
             createdLabel: createdLabel(),
           };
           return { ...tr, takes: [...tr.takes, take], activeTakeId: take.id };

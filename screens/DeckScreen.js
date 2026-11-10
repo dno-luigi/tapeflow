@@ -15,6 +15,7 @@ import EngravedText from '../components/EngravedText';
 import VUMeter from '../components/VUMeter';
 import { pickAudioFile, canImportAudio } from '../lib/audio/importTake';
 import { micUnavailableReason, startMicTake, stopMicTake, micTakeLevel } from '../lib/audio/recordTake';
+import { renderBounce } from '../lib/audio/bounce';
 import { ObsidianBackdrop, GlassPanel, GlassSpecular, glassStroke, glassFill } from '../ui/glass';
 import GlassReel from '../components/GlassReel';
 import { shiftedUri } from '../lib/audio/keyShift';
@@ -200,7 +201,14 @@ export default function DeckScreen() {
     const going = live && magnitude > 0.12 && magnitude <= PLAYABLE_X;
     const clamped = Math.min(PLAYABLE_X, Math.max(SLOWEST_X, magnitude));
     const rate = going ? (speed < 0 ? -1 : 1) * clamped : 0;
-    const items = buildItems(tracks, p.mode === 'rec' ? p.recTracks : []).map((it) =>
+    // A bounced take carries the tracks it printed, so those tracks are left out
+    // while it plays. The printed backing and the live one together is the music
+    // twice over — the one failure mode a bounce has.
+    const skip = p.mode === 'rec' ? p.recTracks.slice() : [];
+    buildItems(tracks, skip).forEach((it) => {
+      (it.sources || []).forEach((j) => { if (skip.indexOf(j) < 0) skip.push(j); });
+    });
+    const items = buildItems(tracks, skip).map((it) =>
       // A key change plays a pitched copy of the take, rendered once; until that
       // copy is ready the original keeps playing, so the tape never goes silent
       // for it while it renders.
@@ -248,19 +256,56 @@ export default function DeckScreen() {
         Alert.alert('Nothing was captured', 'The microphone did not return any audio. Try recording again.');
         return;
       }
+      // Print the music into the take when the deck is set to bounce. The pass then
+      // stands on its own wherever it is played, and the tracks it printed are left
+      // out of the mix while it is heard.
+      let sources = null;
+      if (settings.bounce && Platform.OS === 'web') {
+        try {
+          const from = tracks
+            .map((tr, i) => i)
+            .filter((i) => list.indexOf(i) < 0)
+            .filter((i) => {
+              const tr = tracks[i] || {};
+              const tk = (tr.takes || []).find((x) => x.id === tr.activeTakeId) || null;
+              if (!tk || !tk.uri) return false;
+              // Only the takes the head actually crossed while the pass was running.
+              return (Number(tk.start) || 0) < start + dur && (Number(tk.start) || 0) + (Number(tk.duration) || 0) > start;
+            });
+          if (from.length) {
+            const printed = await renderBounce({
+              micUri: uri,
+              start,
+              duration: Math.round(dur * 10) / 10,
+              rate: speed || 1,
+              tracks,
+              sourceIndexes: from,
+            });
+            if (printed && printed.uri) {
+              uri = printed.uri;
+              peak = printed.peak;
+              sources = from;
+            }
+          }
+        } catch (e) {
+          // Keep the microphone take rather than losing the pass to a failed print.
+          console.error('[deck] bounce failed, keeping the microphone take', e);
+          sources = null;
+        }
+      }
       try {
         // One decimal, like the import path: a 3.54s take should stop where the
         // audio stops, not 0.46s past it in the mixer.
         const length = Math.round(dur * 10) / 10;
         const takeId = newTakeId();
-        list.forEach((i) => studio.addTake && studio.addTake(i, length, undefined, { uri, start, id: takeId, peak }));
+        list.forEach((i) => studio.addTake && studio.addTake(i, length, undefined, { uri, start, id: takeId, peak, sources }));
         // Write the audio to the device as soon as it exists: a blob URL dies with
         // the page, and a take that cannot be heard after a reload is not saved.
         safe(() => rememberTakeAudio(takeId, uri));
         // A pass the microphone heard nothing on is still saved — its place and
         // length on the tape are real — but it says so rather than looking like
         // audio that has gone missing.
-        flash(peak === 0 ? 'SILENT TAKE · THE MIC HEARD NOTHING' : 'TAKE SAVED · ' + fmtShort(dur));
+        flash(sources ? 'BOUNCED · ' + fmtShort(dur) : peak === 0 ? 'SILENT TAKE · THE MIC HEARD NOTHING' : 'TAKE SAVED · ' + fmtShort(dur));
       } catch (e) {
         Alert.alert('Could not save the take', (e && e.message) || 'Try again.');
       }
@@ -628,7 +673,7 @@ export default function DeckScreen() {
     || (recTarget >= 0
       ? 'REC TRK ' + (recTarget + 1) + (playAlong.length ? ' · PLAYING TRK ' + playAlong.join(' + ') : ' · FIRST PASS')
       : anyArmed
-        ? 'REMAINING ' + fmtRem(CAPACITY - hud.pos) + ' · ' + sr + ' kHz · 24-BIT PCM'
+        ? 'REMAINING ' + fmtRem(CAPACITY - hud.pos) + ' · ' + sr + ' kHz · 24-BIT PCM' + (settings.bounce ? ' · BOUNCE' : '')
         : 'TAP A TRACK TO RECORD ONTO IT');
   const active = moving || recording;
   // While a pass is being made the meter is the microphone's own peak. A meter
@@ -735,7 +780,10 @@ export default function DeckScreen() {
       return;
     }
     if (exportBusy.current) return;
-    const items = buildItems(tracks, []);
+    // The same rule as playback: a bounced take replaces the tracks it printed.
+    const skipBounced = [];
+    buildItems(tracks, []).forEach((it) => { (it.sources || []).forEach((j) => { if (skipBounced.indexOf(j) < 0) skipBounced.push(j); }); });
+    const items = buildItems(tracks, skipBounced);
     if (items.length === 0) { flash('NOTHING ON THE TAPE YET'); return; }
     exportBusy.current = true;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
