@@ -20,6 +20,9 @@ import { micUnavailableReason, startMicTake, stopMicTake } from '../lib/audio/re
 const NORMAL = 120; // degrees per second at 1x play speed
 const SEC_PER_REV = 3;
 const MAXV = 1440; // 12x
+// Faster than this the tape is spooling rather than being played back, so the
+// sound drops out — the same thing a real reel does when you whip it.
+const PLAYABLE_X = 4;
 const CAPACITY = 2400; // seconds of tape on the reel (40 minutes)
 const TARGET = { stop: 0, play: NORMAL, rec: NORMAL, rew: -MAXV, ff: MAXV };
 
@@ -117,12 +120,21 @@ export default function DeckScreen() {
     // eslint-disable-next-line
   }, [studio.ready, sessions.length]);
 
-  // Keeps the speaker in step with the tape: plays each track's active take at the right spot.
+  // Keeps the speaker in step with the tape: plays each track's active take at
+  // the right spot, at the speed the reel is actually turning.
+  //
+  // The reel IS the transport. Hold it still and the take stops; drag it slowly
+  // and the take plays back pitched down, flick it and the voice speeds up and
+  // rises, exactly like a hand on a tape spool. Spinning it backwards is a
+  // rewind, which cannot be read backwards, so that is silent while the tape
+  // runs in reverse. Beyond PLAYABLE_X the tape is just spooling.
   syncRef.current = () => {
     const p = phys;
-    const going = (p.mode === 'play' || p.mode === 'rec') && !p.dragging && p.vel > NORMAL * 0.5;
+    const speed = p.vel / NORMAL; // signed: negative is rewind
+    const live = p.mode === 'play' || p.mode === 'rec';
+    const going = live && speed > 0.05 && speed <= PLAYABLE_X;
     const items = buildItems(tracks, p.mode === 'rec' ? p.recTracks : []);
-    safe(() => mixerRef.current.sync(items, p.pos, going, 1));
+    safe(() => mixerRef.current.sync(items, p.pos, going, Math.max(0.05, Math.min(PLAYABLE_X, speed))));
   };
 
   // Stops the microphone and saves one take (with its audio file) per armed track.
