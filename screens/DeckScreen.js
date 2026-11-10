@@ -175,7 +175,12 @@ export default function DeckScreen() {
       // for it while it renders.
       semisHeard ? { ...it, uri: shiftedUri(it.uri, semisHeard) || it.uri } : it
     );
-    safe(() => mixerRef.current.sync(items, p.pos, going, rate, lock));
+    try {
+      mixerRef.current.sync(items, p.pos, going, rate, lock);
+    } catch (e) {
+      // Never silently: a mixer that throws is a tape that stops sounding.
+      console.error('[deck] mixer sync failed', e);
+    }
   };
 
   // Stops the microphone and saves one take (with its audio file) per armed track.
