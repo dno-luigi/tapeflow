@@ -7,7 +7,10 @@ const STORAGE_KEY = 'studio:v1';
 const DEFAULT_SETTINGS = {
   input: 'Built-in microphone',
   sampleRate: 96000,
-  float32: true,
+  // 24-bit PCM, not 32-bit float: a float WAV is the better recording, but it is
+  // the one format a browser's own player can refuse to play, and a track that
+  // plays silence is worse than a track with two bits fewer.
+  float32: false,
   masterTape: false,
   reminderOn: false,
   reminderTime: { hour: 19, minute: 0 },
@@ -337,6 +340,9 @@ export function StudioProvider({ children }) {
             duration: Math.max(0, Number(duration) || 0),
             start: Math.max(0, Number(info.start) || 0),
             uri: info.uri || null,
+            // The peak the microphone actually delivered, so a take that captured
+            // nothing can say so instead of looking like a take.
+            peak: typeof info.peak === 'number' ? info.peak : null,
             createdLabel: createdLabel(),
           };
           return { ...tr, takes: [...tr.takes, take], activeTakeId: take.id };

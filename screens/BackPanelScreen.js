@@ -57,7 +57,6 @@ export default function BackPanelScreen() {
 
   const input = String(settings.input || 'USB-C').toUpperCase().includes('USB') ? 'USB-C' : 'INTERNAL MIC';
   const rate = parseInt(settings.sampleRate, 10) === 48 ? 48 : 96;
-  const float32 = settings.float32 !== false;
   const masterTape = !!settings.masterTape;
   const reminderOn = !!settings.reminderOn;
   const time = parseTime(settings.reminderTime);
@@ -210,7 +209,7 @@ export default function BackPanelScreen() {
             </View>
           </View>
           <Text style={[t.font.body, { fontSize: 14, lineHeight: 20, color: t.textMuted, marginTop: 8 }]}>
-            {`${rate} kHz / ${float32 ? '32-bit float' : '24-bit'} · Phone mic capped at 48 kHz`}
+            {`${rate} kHz / 24-bit PCM · Phone mic capped at 48 kHz`}
           </Text>
         </Section>
 
@@ -228,7 +227,7 @@ export default function BackPanelScreen() {
               }} size={72} />
             </View>
             <View style={{ flex: 1 }}>
-              <ToggleSwitch label="32-BIT FLOAT" value={float32} onValueChange={(v) => { buzz(); updateSettings && updateSettings({ float32: v }); }} />
+              <EngravedText size={12} color={t.textMuted}>24-BIT PCM · plays everywhere</EngravedText>
             </View>
           </View>
           {onMic ? (

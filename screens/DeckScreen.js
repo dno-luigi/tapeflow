@@ -14,7 +14,7 @@ import { createMixer, buildItems } from '../lib/audio/TapeMixer';
 import EngravedText from '../components/EngravedText';
 import VUMeter from '../components/VUMeter';
 import { pickAudioFile, canImportAudio } from '../lib/audio/importTake';
-import { micUnavailableReason, startMicTake, stopMicTake } from '../lib/audio/recordTake';
+import { micUnavailableReason, startMicTake, stopMicTake, micTakeLevel } from '../lib/audio/recordTake';
 import { ObsidianBackdrop, GlassPanel, GlassSpecular, glassStroke, glassFill } from '../ui/glass';
 import GlassReel from '../components/GlassReel';
 import { shiftedUri } from '../lib/audio/keyShift';
@@ -130,6 +130,7 @@ export default function DeckScreen() {
   if (!mixerRef.current) mixerRef.current = createMixer();
   const syncRef = useRef(() => {});
   const recBusy = useRef(false);
+  const noInputWarned = useRef(false);
 
   const angleVal = useRef(new Animated.Value(0)).current;
   const shake = useRef(new Animated.Value(0)).current;
@@ -162,6 +163,24 @@ export default function DeckScreen() {
     hydrateTakeAudio(sessions).catch(() => {});
     // eslint-disable-next-line
   }, [studio.ready, sessions.length, studio.currentSessionId]);
+
+  // While a pass is being made, follow the microphone for the meter, and say so
+  // plainly if it is delivering nothing at all. Silence at the input is the one
+  // cause of "no sound" that looks exactly like a recorder with no audio in it.
+  useEffect(() => {
+    if (mode !== 'rec') return undefined;
+    const id = setInterval(() => {
+      const lvl = micTakeLevel();
+      const recent = lvl ? lvl.recent : 0;
+      setHud((h) => (h.mic === recent ? h : { ...h, mic: recent }));
+      if (lvl && lvl.peak === 0 && lvl.seconds > 1.2 && !noInputWarned.current) {
+        noInputWarned.current = true;
+        flash('NO INPUT · THE MIC HEARS NOTHING');
+      }
+    }, 100);
+    return () => clearInterval(id);
+    // eslint-disable-next-line
+  }, [mode]);
 
   // Keeps the speaker in step with the tape: plays each track's active take at
   // the right spot, at the speed the reel is actually turning.
@@ -204,10 +223,12 @@ export default function DeckScreen() {
     phys.recTracks = [];
     const finish = async () => {
       let uri = null;
+      let peak = null;
       try {
         if (Platform.OS === 'web') {
           const take = await stopMicTake();
           uri = take && take.uri;
+          peak = take && typeof take.peak === 'number' ? take.peak : null;
         } else {
           await recorder.stop();
           uri = recorder.uri;
@@ -232,11 +253,14 @@ export default function DeckScreen() {
         // audio stops, not 0.46s past it in the mixer.
         const length = Math.round(dur * 10) / 10;
         const takeId = newTakeId();
-        list.forEach((i) => studio.addTake && studio.addTake(i, length, undefined, { uri, start, id: takeId }));
+        list.forEach((i) => studio.addTake && studio.addTake(i, length, undefined, { uri, start, id: takeId, peak }));
         // Write the audio to the device as soon as it exists: a blob URL dies with
         // the page, and a take that cannot be heard after a reload is not saved.
         safe(() => rememberTakeAudio(takeId, uri));
-        flash('TAKE SAVED · ' + fmtShort(dur));
+        // A pass the microphone heard nothing on is still saved — its place and
+        // length on the tape are real — but it says so rather than looking like
+        // audio that has gone missing.
+        flash(peak === 0 ? 'SILENT TAKE · THE MIC HEARD NOTHING' : 'TAKE SAVED · ' + fmtShort(dur));
       } catch (e) {
         Alert.alert('Could not save the take', (e && e.message) || 'Try again.');
       }
@@ -459,7 +483,10 @@ export default function DeckScreen() {
         // Record at the rate and depth the back panel is set to, losslessly.
         await startMicTake({
           sampleRate: Number(settings.sampleRate) || 48000,
-          float32: settings.float32 !== false,
+          // 24-bit PCM: the one WAV a browser's own player will play everywhere,
+          // including Safari, which can refuse a 32-bit float file and then sound
+          // exactly like a recorder with no audio in it.
+          float32: false,
         });
       } else {
         const perm = await AudioModule.requestRecordingPermissionsAsync();
@@ -489,6 +516,7 @@ export default function DeckScreen() {
     phys.recStart = phys.pos;
     phys.recTracks = [target];
     setRecFrom(phys.pos);
+    noInputWarned.current = false;
     toMode('rec');
   };
 
@@ -600,10 +628,17 @@ export default function DeckScreen() {
     || (recTarget >= 0
       ? 'REC TRK ' + (recTarget + 1) + (playAlong.length ? ' · PLAYING TRK ' + playAlong.join(' + ') : ' · FIRST PASS')
       : anyArmed
-        ? 'REMAINING ' + fmtRem(CAPACITY - hud.pos) + ' · ' + sr + ' kHz · ' + (settings.float32 === false ? '24-BIT' : '32-BIT FLOAT')
+        ? 'REMAINING ' + fmtRem(CAPACITY - hud.pos) + ' · ' + sr + ' kHz · 24-BIT PCM'
         : 'TAP A TRACK TO RECORD ONTO IT');
   const active = moving || recording;
-  const level = active ? Math.min(1, 0.4 + 0.3 * Math.abs(Math.sin(hud.pos * 6.3)) + 0.15 * Math.random() + Math.min(0.2, speedX * 0.03)) : 0;
+  // While a pass is being made the meter is the microphone's own peak. A meter
+  // that moves while the input is silent is worse than no meter: it is the one
+  // thing that would have said, plainly, that nothing was coming in.
+  const level = recording
+    ? Math.max(0, Math.min(1, (hud.mic || 0) * 1.6))
+    : active
+      ? Math.min(1, 0.4 + 0.3 * Math.abs(Math.sin(hud.pos * 6.3)) + 0.15 * Math.random() + Math.min(0.2, speedX * 0.03))
+      : 0;
   const spin = angleVal.interpolate({ inputRange: [-360, 360], outputRange: ['-360deg', '360deg'] });
   const px = (sec) => Math.max(0, Math.min(stripW, (sec / span) * stripW));
 
@@ -926,6 +961,8 @@ export default function DeckScreen() {
           {tracks.map((tr, i) => {
             const armed = !!tr.armed;
             const n = (tr.takes || []).length;
+            const activeTake = (tr.takes || []).find((k) => k.id === tr.activeTakeId) || (tr.takes || [])[n - 1];
+            const silent = !!(activeTake && activeTake.peak === 0);
             return (
               <Pressable
                 key={i}
@@ -949,7 +986,7 @@ export default function DeckScreen() {
               >
                 <Text style={[t.font.label, { color: armed ? t.onAccent : t.textMuted, fontSize: 13, lineHeight: 17 }]}>{'TRK ' + (i + 1)}</Text>
                 <Text style={[t.font.caption, { color: armed ? t.onAccent : t.textMuted, fontSize: 10, lineHeight: 13, opacity: 0.85 }]}>
-                  {armed ? 'REC HERE' : n > 0 ? (anyArmed ? 'PLAYS' : n === 1 ? '1 TAKE' : n + ' TAKES') : 'EMPTY'}
+                  {armed ? 'REC HERE' : silent ? 'SILENT' : n > 0 ? (anyArmed ? 'PLAYS' : n === 1 ? '1 TAKE' : n + ' TAKES') : 'EMPTY'}
                 </Text>
               </Pressable>
             );
