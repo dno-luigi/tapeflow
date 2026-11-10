@@ -31,8 +31,74 @@ jobs:
       - name: Build the Expo web app
         run: npm run build:web
 
+      # Nothing that needs a Cloudflare account happens until this step says so.
+      # It runs after the build on purpose: until the account is connected this
+      # workflow is still a build check, so it has to keep proving the app
+      # compiles rather than going quiet.
+      #
+      #   nothing configured      -> skip the deploy, stay green, say what to set
+      #   half configured         -> fail, naming what is missing
+      #   fully configured        -> ready=true, the deploy steps run
+      - name: Check Cloudflare configuration
+        id: cloudflare
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+
+          token_missing=0
+          account_missing=0
+          if [ -z "${CF_TOKEN}" ]; then token_missing=1; fi
+          if [ -z "${CF_ACCOUNT_ID}" ]; then account_missing=1; fi
+
+          # A database id that is still the placeholder means `wrangler d1
+          # create tapeflow` has not been run, so there is nothing to deploy to.
+          db_placeholder=0
+          if grep -q 'REPLACE_WITH_D1_DATABASE_ID' wrangler.jsonc 2>/dev/null; then db_placeholder=1; fi
+
+          if [ "${token_missing}" = 1 ] && [ "${account_missing}" = 1 ]; then
+            {
+              echo "ready=false"
+            } >> "$GITHUB_OUTPUT"
+            echo "::notice title=Cloudflare not configured::Deploy skipped. Add the repository secrets CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID, run 'npx wrangler d1 create tapeflow' and put its id in wrangler.jsonc. See README.md."
+            {
+              echo "### Deploy skipped"
+              echo
+              echo "Build is green; the Cloudflare steps did not run because this repository is not connected to an account yet."
+              echo
+              echo "To turn deployment on:"
+              echo
+              echo "1. Add repository secrets \`CLOUDFLARE_API_TOKEN\` and \`CLOUDFLARE_ACCOUNT_ID\` (Settings -> Secrets and variables -> Actions)."
+              echo "2. Run \`npx wrangler d1 create tapeflow\` and replace \`REPLACE_WITH_D1_DATABASE_ID\` in \`wrangler.jsonc\` with the printed id."
+              echo "3. Optionally add a repository variable \`TAPEFLOW_URL\` so the deploy smoke-tests \`/api/health\`."
+              echo
+              echo "See [README.md](../blob/main/README.md) for the full setup."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # Half set up is a mistake, not a choice: someone meant to deploy and
+          # missed something, and skipping quietly would hide that.
+          if [ "${token_missing}" = 1 ] || [ "${account_missing}" = 1 ]; then
+            missing=""
+            if [ "${token_missing}" = 1 ]; then missing="${missing} CLOUDFLARE_API_TOKEN"; fi
+            if [ "${account_missing}" = 1 ]; then missing="${missing} CLOUDFLARE_ACCOUNT_ID"; fi
+            echo "::error title=Cloudflare setup incomplete::Missing repository secret(s):${missing}. Add both, or remove the one that is set to skip deployment entirely."
+            exit 1
+          fi
+
+          if [ "${db_placeholder}" = 1 ]; then
+            echo "::error title=D1 database not created::wrangler.jsonc still has the placeholder database_id. Run 'npx wrangler d1 create tapeflow' and commit the id it prints."
+            exit 1
+          fi
+
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+          echo "Cloudflare credentials and D1 database are configured; deploying."
+
       # Idempotent: db/schema.sql uses CREATE TABLE IF NOT EXISTS.
       - name: Apply the D1 schema
+        if: steps.cloudflare.outputs.ready == 'true'
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -40,6 +106,7 @@ jobs:
           command: d1 execute tapeflow --remote --file=db/schema.sql
 
       - name: Deploy the Worker
+        if: steps.cloudflare.outputs.ready == 'true'
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -47,18 +114,20 @@ jobs:
           command: deploy
 
       - name: Smoke test /api/health
+        if: steps.cloudflare.outputs.ready == 'true'
+        env:
+          TAPEFLOW_URL: ${{ vars.TAPEFLOW_URL }}
         run: |
-          url="${{ vars.TAPEFLOW_URL }}"
-          if [ -z "$url" ]; then
+          if [ -z "${TAPEFLOW_URL}" ]; then
             echo "vars.TAPEFLOW_URL is not set; skipping the smoke test."
             exit 0
           fi
           for attempt in 1 2 3 4 5; do
-            if curl -fsS "$url/api/health" | grep -q '"ok":true'; then
+            if curl -fsS "${TAPEFLOW_URL}/api/health" | grep -q '"ok":true'; then
               echo "API is healthy."
               exit 0
             fi
             sleep 5
           done
-          echo "API did not answer /api/health."
+          echo "::error title=Deployed API is not healthy::${TAPEFLOW_URL}/api/health did not answer with ok:true after 5 attempts."
           exit 1
