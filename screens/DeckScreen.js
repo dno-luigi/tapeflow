@@ -19,6 +19,7 @@ import { ObsidianBackdrop, GlassPanel, GlassSpecular, glassStroke, glassFill } f
 import GlassReel from '../components/GlassReel';
 import { shiftedUri } from '../lib/audio/keyShift';
 import { exportReel, canExport } from '../lib/audio/exportReel';
+import { rememberTakeAudio, hydrateTakeAudio } from '../lib/audio/takeStore';
 
 // Wheel physics. One turn of the reel moves SEC_PER_REV seconds of tape at normal speed.
 const NORMAL = 120; // degrees per second at 1x play speed
@@ -60,6 +61,8 @@ const fmtShort = (s) => {
   return Math.floor(v / 60) + ':' + String(v % 60).padStart(2, '0');
 };
 const safe = (fn) => { try { return fn(); } catch (e) { return undefined; } };
+// Takes are named by the caller so their audio can be filed under the same name.
+const newTakeId = () => 't' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 
 // A ring of grip marks around the reel, turning with it.
 function Bezel({ size, color, accent }) {
@@ -151,6 +154,15 @@ export default function DeckScreen() {
     // eslint-disable-next-line
   }, [studio.ready, sessions.length]);
 
+  // After a reload, every take recorded in an earlier page has a blob URL that no
+  // longer resolves. Read the audio back off the device so those tracks can be
+  // heard again instead of showing PLAYS over silence.
+  useEffect(() => {
+    if (!studio.ready || !sessions.length) return;
+    hydrateTakeAudio(sessions).catch(() => {});
+    // eslint-disable-next-line
+  }, [studio.ready, sessions.length, studio.currentSessionId]);
+
   // Keeps the speaker in step with the tape: plays each track's active take at
   // the right spot, at the speed the reel is actually turning.
   //
@@ -219,7 +231,11 @@ export default function DeckScreen() {
         // One decimal, like the import path: a 3.54s take should stop where the
         // audio stops, not 0.46s past it in the mixer.
         const length = Math.round(dur * 10) / 10;
-        list.forEach((i) => studio.addTake && studio.addTake(i, length, undefined, { uri, start }));
+        const takeId = newTakeId();
+        list.forEach((i) => studio.addTake && studio.addTake(i, length, undefined, { uri, start, id: takeId }));
+        // Write the audio to the device as soon as it exists: a blob URL dies with
+        // the page, and a take that cannot be heard after a reload is not saved.
+        safe(() => rememberTakeAudio(takeId, uri));
         flash('TAKE SAVED · ' + fmtShort(dur));
       } catch (e) {
         Alert.alert('Could not save the take', (e && e.message) || 'Try again.');
@@ -504,7 +520,9 @@ export default function DeckScreen() {
     // where the audio stops, not up to a second past it.
     const length = Math.min(Math.max(0.5, Math.round((picked.duration || 30) * 10) / 10), Math.max(0.5, Math.round(left * 10) / 10));
     try {
-      targets.forEach((i) => studio.addTake && studio.addTake(i, length, undefined, { uri: picked.uri, start: phys.pos }));
+      const takeId = newTakeId();
+      targets.forEach((i) => studio.addTake && studio.addTake(i, length, undefined, { uri: picked.uri, start: phys.pos, id: takeId }));
+      safe(() => rememberTakeAudio(takeId, picked.uri));
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
       flash('TAKE SAVED · ' + fmtShort(length));
     } catch (e) {

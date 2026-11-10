@@ -330,7 +330,9 @@ export function StudioProvider({ children }) {
           if (i !== trackIndex) return tr;
           const n = tr.takes.reduce((m, tk) => Math.max(m, tk.n || 0), 0) + 1;
           const take = {
-            id: uid('t'),
+            // The caller can name the take, so the audio it is about to store can
+            // be filed under that same name.
+            id: info.id || uid('t'),
             n,
             duration: Math.max(0, Number(duration) || 0),
             start: Math.max(0, Number(info.start) || 0),
