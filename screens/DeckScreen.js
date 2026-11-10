@@ -269,6 +269,11 @@ export default function DeckScreen() {
   // Grabbing and turning the reel by hand.
   const wheelSize = useRef(300);
   const wheel = useRef(PanResponder.create({
+    // Capture on touch-down, not just on start. Without the capture phase the
+    // deck's own swipe gesture could take the touch away mid-turn and the reel
+    // simply stopped: the hand was moving, the wheel was not.
+    onStartShouldSetPanResponderCapture: () => true,
+    onMoveShouldSetPanResponderCapture: () => true,
     onStartShouldSetPanResponder: () => true,
     onMoveShouldSetPanResponder: () => true,
     onPanResponderTerminationRequest: () => false,
@@ -315,8 +320,14 @@ export default function DeckScreen() {
     onPanResponderTerminate: () => { phys.dragging = false; phys.locked = false; setGrabbed(false); },
   })).current;
 
+  // Flipping to the back panel by swiping is kept, but only from the edge of the
+  // screen. The reel owns the middle: a gesture that starts on it belongs to the
+  // wheel, at every speed, and nothing else may claim it.
   const swipe = useRef(PanResponder.create({
-    onMoveShouldSetPanResponder: (e, g) => Math.abs(g.dx) > 30 && Math.abs(g.dx) > Math.abs(g.dy) * 2,
+    onMoveShouldSetPanResponder: (e, g) => {
+      const fromEdge = g.x0 <= 32 || g.x0 >= W - 32;
+      return fromEdge && Math.abs(g.dx) > 40 && Math.abs(g.dx) > Math.abs(g.dy) * 2;
+    },
     onPanResponderRelease: (e, g) => { if (g.dx < -60) nav.navigate('Back Panel'); },
   })).current;
 
