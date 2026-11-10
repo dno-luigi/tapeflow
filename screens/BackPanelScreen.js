@@ -271,7 +271,6 @@ export default function BackPanelScreen() {
         </Section>
 
         <View style={[styles.rowCenter, { marginTop: 24, gap: 12 }]}>
-          <Key label="DJ MODE" icon="options" onPress={() => navigation.navigate('DJ Mode')} />
           <Key label="SESSIONS" icon="albums-outline" onPress={() => navigation.navigate('Sessions')} />
         </View>
 

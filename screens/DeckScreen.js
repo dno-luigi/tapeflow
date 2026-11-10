@@ -17,6 +17,8 @@ import { pickAudioFile, canImportAudio } from '../lib/audio/importTake';
 import { micUnavailableReason, startMicTake, stopMicTake } from '../lib/audio/recordTake';
 import { ObsidianBackdrop, GlassPanel, GlassSpecular, glassStroke, glassFill } from '../ui/glass';
 import GlassReel from '../components/GlassReel';
+import { shiftedUri } from '../lib/audio/keyShift';
+import { exportReel, canExport } from '../lib/audio/exportReel';
 
 // Wheel physics. One turn of the reel moves SEC_PER_REV seconds of tape at normal speed.
 const NORMAL = 120; // degrees per second at 1x play speed
@@ -30,7 +32,10 @@ const MAXV = 1440; // 12x
 const PLAYABLE_X = 2;
 const SLOWEST_X = 0.5;
 const CAPACITY = 2400; // seconds of tape on the reel (40 minutes)
-const TARGET = { stop: 0, play: NORMAL, rec: NORMAL, rew: -MAXV, ff: MAXV };
+const MODES = { stop: 0, rec: NORMAL, rew: -MAXV, ff: MAXV };
+// The speeds the deck steps through with the hand off the reel. 100% is the tape
+// at its own speed, and the ends are the same range the reel allows by hand.
+const SPEEDS = [0.5, 0.75, 0.9, 1, 1.1, 1.25, 1.5, 2];
 
 const fmt = (s) => {
   const v = Math.max(0, s || 0);
@@ -96,6 +101,14 @@ export default function DeckScreen() {
   const [legendMsg, setLegendMsg] = useState('');
   const [stripW, setStripW] = useState(300);
   const [recFrom, setRecFrom] = useState(0);
+  // How fast the tape runs when no hand is on the reel, and how far the take is
+  // moved in key on top of that. `lock` decides whether a speed change keeps the
+  // key (a speed changer) or bends it (a tape).
+  const [speed, setSpeed] = useState(1);
+  const [semis, setSemis] = useState(0);
+  const [lock, setLock] = useState(false);
+  const speedRef = useRef(1);
+  const exportBusy = useRef(false);
 
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const mixerRef = useRef(null);
@@ -144,8 +157,13 @@ export default function DeckScreen() {
     const going = live && magnitude > 0.12 && magnitude <= PLAYABLE_X;
     const clamped = Math.min(PLAYABLE_X, Math.max(SLOWEST_X, magnitude));
     const rate = going ? (speed < 0 ? -1 : 1) * clamped : 0;
-    const items = buildItems(tracks, p.mode === 'rec' ? p.recTracks : []);
-    safe(() => mixerRef.current.sync(items, p.pos, going, rate));
+    const items = buildItems(tracks, p.mode === 'rec' ? p.recTracks : []).map((it) =>
+      // A key change plays a pitched copy of the take, rendered once; until that
+      // copy is ready the original keeps playing, so the tape never goes silent
+      // for it while it renders.
+      semis ? { ...it, uri: shiftedUri(it.uri, semis) || it.uri } : it
+    );
+    safe(() => mixerRef.current.sync(items, p.pos, going, rate, lock));
   };
 
   // Stops the microphone and saves one take (with its audio file) per armed track.
@@ -229,7 +247,7 @@ export default function DeckScreen() {
         if (p.mode === 'rec') {
           p.vel = NORMAL;
         } else {
-          const target = TARGET[p.mode] || 0;
+          const target = p.mode === 'play' ? NORMAL * speedRef.current : MODES[p.mode] || 0;
           const k = Math.abs(target) > Math.abs(p.vel) ? 5 : target === 0 ? 1.3 : 2.5;
           p.vel += (target - p.vel) * (1 - Math.exp(-k * dt));
           if (Math.abs(target - p.vel) < 1) p.vel = target;
@@ -511,6 +529,9 @@ export default function DeckScreen() {
   // tape is allowed to follow and the readout should say what is being heard.
   const speedPct = Math.round(Math.min(PLAYABLE_X, Math.max(SLOWEST_X, speedX)) * 100);
   const moving = Math.abs(hud.vel) >= 1;
+  // While the tape is running the reel is the truth, so the readout follows the
+  // hand; stopped, it shows the speed the deck is set to.
+  const speedLabel = mode === 'play' && moving ? speedPct + '%' : Math.round(speed * 100) + '%';
   const legend = legendMsg
     || (anyArmed
       ? 'REMAINING ' + fmtRem(CAPACITY - hud.pos) + ' · ' + sr + ' kHz · ' + (settings.float32 === false ? '24-BIT' : '32-BIT FLOAT')
@@ -519,6 +540,50 @@ export default function DeckScreen() {
   const level = active ? Math.min(1, 0.4 + 0.3 * Math.abs(Math.sin(hud.pos * 6.3)) + 0.15 * Math.random() + Math.min(0.2, speedX * 0.03)) : 0;
   const spin = angleVal.interpolate({ inputRange: [-360, 360], outputRange: ['-360deg', '360deg'] });
   const px = (sec) => Math.max(0, Math.min(stripW, (sec / span) * stripW));
+
+  const stepSpeed = (dir) => {
+    Haptics.selectionAsync().catch(() => {});
+    const at = SPEEDS.findIndex((v) => Math.abs(v - speed) < 0.001);
+    const from = at < 0 ? SPEEDS.indexOf(1) : at;
+    const next = SPEEDS[Math.max(0, Math.min(SPEEDS.length - 1, from + dir))];
+    speedRef.current = next;
+    setSpeed(next);
+    flash('SPEED ' + Math.round(next * 100) + '%');
+  };
+  const stepKey = (dir) => {
+    Haptics.selectionAsync().catch(() => {});
+    const next = Math.max(-12, Math.min(12, semis + dir));
+    setSemis(next);
+    flash(next === 0 ? 'KEY CENTRED' : 'KEY ' + (next > 0 ? '+' : '') + next + ' · SAME SPEED');
+  };
+  const toggleLock = () => {
+    Haptics.selectionAsync().catch(() => {});
+    const next = !lock;
+    setLock(next);
+    flash(next ? 'PITCH LOCK · SPEED KEEPS THE KEY' : 'TAPE PITCH · SPEED BENDS THE KEY');
+  };
+  const onExport = async () => {
+    if (mode === 'rec') { flash('STOP RECORDING FIRST'); return; }
+    if (!canExport()) {
+      Alert.alert('Saving a file is web-only for now', 'Recording and playback work everywhere; writing a WAV needs a browser.');
+      return;
+    }
+    if (exportBusy.current) return;
+    const items = buildItems(tracks, []);
+    if (items.length === 0) { flash('NOTHING ON THE TAPE YET'); return; }
+    exportBusy.current = true;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    flash('RENDERING ' + Math.round(speed * 100) + '%' + (semis ? ' · KEY ' + (semis > 0 ? '+' : '') + semis : '') + ' …');
+    try {
+      const out = await exportReel({ items, name: (current && current.name) || 'reel', speed, semitones: semis, pitchLock: lock });
+      flash('SAVED · ' + out.filename);
+    } catch (e) {
+      flash('COULD NOT SAVE THE FILE');
+      Alert.alert('Could not save the file', (e && e.message) || 'Try again.');
+    } finally {
+      exportBusy.current = false;
+    }
+  };
 
   const key = (icon, onPress, label, on) => (
     <GlassPanel key={label} radius={12} style={[s.keyShell, { borderColor: on ? t.warning : glassStroke }]}>
@@ -553,8 +618,8 @@ export default function DeckScreen() {
               <Ionicons name="cloud-upload-outline" size={22} color={t.textMuted} />
             </Pressable>
           ) : null}
-          <Pressable onPress={() => nav.navigate('DJ Mode')} accessibilityRole="button" accessibilityLabel="Open DJ mode" style={s.topBtn}>
-            <Ionicons name="options" size={22} color={t.textMuted} />
+          <Pressable onPress={onExport} accessibilityRole="button" accessibilityLabel="Save the reel as a WAV file" style={s.topBtn}>
+            <Ionicons name="download-outline" size={22} color={t.textMuted} />
           </Pressable>
           <Pressable onPress={() => nav.navigate('Back Panel')} accessibilityRole="button" accessibilityLabel="Flip to back panel" style={s.topBtn}>
             <Ionicons name="settings-outline" size={22} color={t.textMuted} />
@@ -607,16 +672,69 @@ export default function DeckScreen() {
               </Svg>
             </View>
           </View>
-          <GlassPanel radius={16} style={[s.speedPill, { borderColor: recording ? t.accent : glassStroke }]}>
-            <Ionicons
-              name={!moving ? 'pause' : hud.vel > 0 ? 'play' : 'play-back'}
-              size={14}
-              color={recording ? t.accent : t.warning}
-            />
-            <EngravedText size={12} color={recording ? t.accent : t.warning} style={{ marginLeft: 6 }}>
-              {recording ? 'RECORDING · 100%' : !moving ? 'STOPPED · SPIN TO SCRUB' : speedX > PLAYABLE_X ? 'SPOOLING' : speedPct + '%'}
-            </EngravedText>
-          </GlassPanel>
+          <View style={s.pillRow}>
+            <GlassPanel radius={16} style={[s.pill, { borderColor: recording ? t.accent : glassStroke }]}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Slower"
+                hitSlop={12}
+                onPress={() => stepSpeed(-1)}
+                style={s.pillStep}
+              >
+                <Ionicons name="remove" size={16} color={recording ? t.accent : t.warning} />
+              </Pressable>
+              <EngravedText size={12} color={recording ? t.accent : t.warning} style={{ minWidth: 64, textAlign: 'center' }}>
+                {recording ? 'REC · 100%' : moving && speedX > PLAYABLE_X ? 'SPOOLING' : speedLabel}
+              </EngravedText>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Faster"
+                hitSlop={12}
+                onPress={() => stepSpeed(1)}
+                style={s.pillStep}
+              >
+                <Ionicons name="add" size={16} color={recording ? t.accent : t.warning} />
+              </Pressable>
+            </GlassPanel>
+
+            <GlassPanel radius={16} style={[s.pill, { borderColor: semis ? t.accent : glassStroke }]}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Lower the key by a semitone"
+                hitSlop={12}
+                onPress={() => stepKey(-1)}
+                style={s.pillStep}
+              >
+                <Ionicons name="remove" size={16} color={semis ? t.accent : t.warning} />
+              </Pressable>
+              <EngravedText size={12} color={semis ? t.accent : t.warning} style={{ minWidth: 52, textAlign: 'center' }}>
+                {semis === 0 ? 'KEY 0' : 'KEY ' + (semis > 0 ? '+' : '') + semis}
+              </EngravedText>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Raise the key by a semitone"
+                hitSlop={12}
+                onPress={() => stepKey(1)}
+                style={s.pillStep}
+              >
+                <Ionicons name="add" size={16} color={semis ? t.accent : t.warning} />
+              </Pressable>
+            </GlassPanel>
+
+            <Pressable
+              accessibilityRole="switch"
+              accessibilityState={{ checked: lock }}
+              accessibilityLabel={lock ? 'Pitch lock on: changing the speed keeps the key' : 'Tape pitch: changing the speed bends the key'}
+              onPress={toggleLock}
+            >
+              <GlassPanel radius={16} style={[s.pill, { borderColor: lock ? t.warning : glassStroke }]}>
+                <Ionicons name={lock ? 'lock-closed' : 'lock-open'} size={13} color={lock ? t.warning : t.textMuted} />
+                <EngravedText size={11} color={lock ? t.warning : t.textMuted} style={{ marginLeft: 5 }}>
+                  {lock ? 'PITCH LOCK' : 'TAPE PITCH'}
+                </EngravedText>
+              </GlassPanel>
+            </Pressable>
+          </View>
         </View>
 
         {/* Tape strip: the whole recording, tap to jump */}
@@ -752,7 +870,9 @@ const s = StyleSheet.create({
   pinhole: { position: 'absolute', right: 6, bottom: 6, width: 8, height: 8, borderRadius: 4 },
   wheelArea: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   notch: { position: 'absolute', top: -6, width: 16, height: 14 },
-  speedPill: { marginTop: 8, height: 32, paddingHorizontal: 14, borderRadius: 16, borderWidth: 1, flexDirection: 'row', alignItems: 'center' },
+  pillRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8, paddingHorizontal: 4 },
+  pill: { height: 32, paddingHorizontal: 4, borderRadius: 16, borderWidth: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
+  pillStep: { width: 28, height: 28, alignItems: 'center', justifyContent: 'center' },
   strip: { height: 64, marginHorizontal: 20, justifyContent: 'center' },
   stripBar: { height: 14, borderRadius: 3, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden' },
   playhead: { position: 'absolute', width: 2, height: 30, top: 14 },

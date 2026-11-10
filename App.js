@@ -15,7 +15,6 @@ import WelcomeScreen from './screens/WelcomeScreen';
 import SignInScreen from './screens/SignInScreen';
 import DeckScreen from './screens/DeckScreen';
 import TakesScreen from './screens/TakesScreen';
-import DJModeScreen from './screens/DJModeScreen';
 import BackPanelScreen from './screens/BackPanelScreen';
 import SessionsScreen from './screens/SessionsScreen';
 
@@ -36,7 +35,6 @@ function Root() {
       <RootStack.Screen name="Welcome" component={guardScreen(WelcomeScreen, "Welcome")} />
       <RootStack.Screen name="Sign In" component={guardScreen(SignInScreen, "Sign In")} />
       <RootStack.Screen name="Deck" component={guardScreen(DeckScreen, "Deck")} />
-      <RootStack.Screen name="DJ Mode" component={guardScreen(DJModeScreen, "DJ Mode")} />
       <RootStack.Screen name="Back Panel" component={guardScreen(BackPanelScreen, "Back Panel")} />
       <RootStack.Screen name="Sessions" component={guardScreen(SessionsScreen, "Sessions")} />
       <RootStack.Screen name="Takes" component={guardScreen(TakesScreen, "Takes")} options={{ presentation: 'transparentModal', headerShown: false, cardStyle: { flex: 1, backgroundColor: 'transparent' }, cardOverlayEnabled: false }} />
