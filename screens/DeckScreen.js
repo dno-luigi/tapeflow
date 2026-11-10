@@ -10,12 +10,13 @@ import { useTheme } from '../ui/theme';
 import { AppImage } from '../ui/kit';
 import { ART } from '../constants/artwork';
 import { useStudio } from '../store/StudioContext';
-import { createMixer, buildItems } from '../lib/audio/TapeMixer';
+import { createMixer, buildItems, supersedeSkip } from '../lib/audio/TapeMixer';
 import EngravedText from '../components/EngravedText';
 import VUMeter from '../components/VUMeter';
 import { pickAudioFile, canImportAudio } from '../lib/audio/importTake';
 import { micUnavailableReason, startMicTake, stopMicTake, micTakeLevel } from '../lib/audio/recordTake';
 import { renderBounce } from '../lib/audio/bounce';
+import { takeAudioReady } from '../lib/audio/takeStore';
 import { ObsidianBackdrop, GlassPanel, GlassSpecular, glassStroke, glassFill } from '../ui/glass';
 import GlassReel from '../components/GlassReel';
 import { shiftedUri } from '../lib/audio/keyShift';
@@ -118,6 +119,9 @@ export default function DeckScreen() {
   // `semis` is the key on the readout, `semisHeard` is the key the audio is at:
   // a key change is rendered into the take, so the sound follows once the hand
   // has settled instead of re-rendering on every pixel of a drag.
+  // Whether the device has been searched for each take's audio yet. Until it has,
+  // a take is not "missing", it is simply not loaded.
+  const [audioChecked, setAudioChecked] = useState(false);
   const [speed, setSpeed] = useState(1);
   const [semis, setSemis] = useState(0);
   const [semisHeard, setSemisHeard] = useState(0);
@@ -161,7 +165,12 @@ export default function DeckScreen() {
   // heard again instead of showing PLAYS over silence.
   useEffect(() => {
     if (!studio.ready || !sessions.length) return;
-    hydrateTakeAudio(sessions).catch(() => {});
+    let live = true;
+    hydrateTakeAudio(sessions)
+      .catch(() => {})
+      // Only now is a take without audio really without audio, rather than not yet read.
+      .then(() => { if (live) setAudioChecked(true); });
+    return () => { live = false; };
     // eslint-disable-next-line
   }, [studio.ready, sessions.length, studio.currentSessionId]);
 
@@ -204,10 +213,7 @@ export default function DeckScreen() {
     // A bounced take carries the tracks it printed, so those tracks are left out
     // while it plays. The printed backing and the live one together is the music
     // twice over — the one failure mode a bounce has.
-    const skip = p.mode === 'rec' ? p.recTracks.slice() : [];
-    buildItems(tracks, skip).forEach((it) => {
-      (it.sources || []).forEach((j) => { if (skip.indexOf(j) < 0) skip.push(j); });
-    });
+    const skip = supersedeSkip(tracks, p.mode === 'rec' ? p.recTracks : []);
     const items = buildItems(tracks, skip).map((it) =>
       // A key change plays a pitched copy of the take, rendered once; until that
       // copy is ready the original keeps playing, so the tape never goes silent
@@ -260,6 +266,7 @@ export default function DeckScreen() {
       // stands on its own wherever it is played, and the tracks it printed are left
       // out of the mix while it is heard.
       let sources = null;
+      let sourcesMissing = 0;
       if (settings.bounce && Platform.OS === 'web') {
         try {
           const from = tracks
@@ -284,7 +291,10 @@ export default function DeckScreen() {
             if (printed && printed.uri) {
               uri = printed.uri;
               peak = printed.peak;
-              sources = from;
+              // What actually made it in, not what was offered: a track whose audio
+              // is gone cannot be printed and must not be excluded from the mix.
+              sources = printed.sources && printed.sources.length ? printed.sources : null;
+              sourcesMissing = sources ? from.length - sources.length : 0;
             }
           }
         } catch (e) {
@@ -305,7 +315,7 @@ export default function DeckScreen() {
         // A pass the microphone heard nothing on is still saved — its place and
         // length on the tape are real — but it says so rather than looking like
         // audio that has gone missing.
-        flash(sources ? 'BOUNCED · ' + fmtShort(dur) : peak === 0 ? 'SILENT TAKE · THE MIC HEARD NOTHING' : 'TAKE SAVED · ' + fmtShort(dur));
+        flash(sources ? 'BOUNCED · ' + fmtShort(dur) + (sourcesMissing > 0 ? ' · ' + sourcesMissing + ' HAD NO AUDIO' : '') : peak === 0 ? 'SILENT TAKE · THE MIC HEARD NOTHING' : 'TAKE SAVED · ' + fmtShort(dur));
       } catch (e) {
         Alert.alert('Could not save the take', (e && e.message) || 'Try again.');
       }
@@ -781,9 +791,7 @@ export default function DeckScreen() {
     }
     if (exportBusy.current) return;
     // The same rule as playback: a bounced take replaces the tracks it printed.
-    const skipBounced = [];
-    buildItems(tracks, []).forEach((it) => { (it.sources || []).forEach((j) => { if (skipBounced.indexOf(j) < 0) skipBounced.push(j); }); });
-    const items = buildItems(tracks, skipBounced);
+    const items = buildItems(tracks, supersedeSkip(tracks, []));
     if (items.length === 0) { flash('NOTHING ON THE TAPE YET'); return; }
     exportBusy.current = true;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
@@ -1011,6 +1019,9 @@ export default function DeckScreen() {
             const n = (tr.takes || []).length;
             const activeTake = (tr.takes || []).find((k) => k.id === tr.activeTakeId) || (tr.takes || [])[n - 1];
             const silent = !!(activeTake && activeTake.peak === 0);
+            // A take whose file this page cannot find is silence with a reason: say
+            // so on the track instead of letting it claim to play.
+            const noAudio = !!(audioChecked && activeTake && !silent && !takeAudioReady(activeTake));
             return (
               <Pressable
                 key={i}
@@ -1034,7 +1045,7 @@ export default function DeckScreen() {
               >
                 <Text style={[t.font.label, { color: armed ? t.onAccent : t.textMuted, fontSize: 13, lineHeight: 17 }]}>{'TRK ' + (i + 1)}</Text>
                 <Text style={[t.font.caption, { color: armed ? t.onAccent : t.textMuted, fontSize: 10, lineHeight: 13, opacity: 0.85 }]}>
-                  {armed ? 'REC HERE' : silent ? 'SILENT' : n > 0 ? (anyArmed ? 'PLAYS' : n === 1 ? '1 TAKE' : n + ' TAKES') : 'EMPTY'}
+                  {armed ? 'REC HERE' : silent ? 'SILENT' : noAudio ? 'NO AUDIO' : n > 0 ? (anyArmed ? 'PLAYS' : n === 1 ? '1 TAKE' : n + ' TAKES') : 'EMPTY'}
                 </Text>
               </Pressable>
             );
