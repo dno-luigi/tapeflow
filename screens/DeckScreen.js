@@ -14,6 +14,7 @@ import { createMixer, buildItems } from '../lib/audio/TapeMixer';
 import EngravedText from '../components/EngravedText';
 import VUMeter from '../components/VUMeter';
 import { pickAudioFile, canImportAudio } from '../lib/audio/importTake';
+import { micUnavailableReason, startMicTake, stopMicTake } from '../lib/audio/recordTake';
 
 // Wheel physics. One turn of the reel moves SEC_PER_REV seconds of tape at normal speed.
 const NORMAL = 120; // degrees per second at 1x play speed
@@ -134,8 +135,13 @@ export default function DeckScreen() {
     const finish = async () => {
       let uri = null;
       try {
-        await recorder.stop();
-        uri = recorder.uri;
+        if (Platform.OS === 'web') {
+          const take = await stopMicTake();
+          uri = take && take.uri;
+        } else {
+          await recorder.stop();
+          uri = recorder.uri;
+        }
       } catch (e) {
         uri = null;
       }
@@ -149,7 +155,10 @@ export default function DeckScreen() {
         return;
       }
       try {
-        list.forEach((i) => studio.addTake && studio.addTake(i, Math.round(dur), undefined, { uri, start }));
+        // One decimal, like the import path: a 3.54s take should stop where the
+        // audio stops, not 0.46s past it in the mixer.
+        const length = Math.round(dur * 10) / 10;
+        list.forEach((i) => studio.addTake && studio.addTake(i, length, undefined, { uri, start }));
         flash('TAKE SAVED · ' + fmtShort(dur));
       } catch (e) {
         Alert.alert('Could not save the take', (e && e.message) || 'Try again.');
@@ -175,7 +184,7 @@ export default function DeckScreen() {
 
   useEffect(() => {
     return () => {
-      if (phys.mode === 'rec') safe(() => recorder.stop());
+      if (phys.mode === 'rec') safe(() => (Platform.OS === 'web' ? stopMicTake() : recorder.stop()));
       safe(() => mixerRef.current && mixerRef.current.dispose());
     };
     // eslint-disable-next-line
@@ -339,31 +348,36 @@ export default function DeckScreen() {
     }
     recBusy.current = true;
     try {
-      const perm = await AudioModule.requestRecordingPermissionsAsync();
-      if (!perm || !perm.granted) {
-        // On the web this means the browser gave the page no input device (or it
-        // was refused), which is a dead end for the mic but not for the deck:
-        // the upload key takes audio from a file instead.
-        // The legend carries it too: on the web an Alert can be swallowed, and a
-        // record key that does nothing is the worst way to learn this.
-        flash(Platform.OS === 'web' ? 'NO MICROPHONE · IMPORT A FILE INSTEAD' : 'MICROPHONE IS OFF');
-        Alert.alert(
-          'Microphone is off',
-          Platform.OS === 'web'
-            ? 'This browser gave the page no microphone, so there is nothing to record from. Allow it in the address bar and try again, or bring audio in with the upload key at the top of the deck.'
-            : 'Allow microphone access for this app in Settings to record sound.',
-        );
-        return;
+      if (Platform.OS === 'web') {
+        // The browser path lives in lib/audio/recordTake so the reason a take
+        // cannot start survives to the screen. expo-audio answers every web
+        // failure with a bare "not granted" — plain http, a blocked microphone
+        // and a machine with no input device all look the same through it.
+        const blocked = micUnavailableReason();
+        if (blocked) {
+          flash(blocked.short);
+          Alert.alert('The microphone cannot start', blocked.message);
+          return;
+        }
+        await startMicTake();
+      } else {
+        const perm = await AudioModule.requestRecordingPermissionsAsync();
+        if (!perm || !perm.granted) {
+          // The legend carries it too: on the web an Alert can be swallowed, and a
+          // record key that does nothing is the worst way to learn this.
+          flash('MICROPHONE IS OFF');
+          Alert.alert('Microphone is off', 'Allow microphone access for this app in Settings to record sound.');
+          return;
+        }
+        await setAudioModeAsync({ playsInSilentMode: true, allowsRecording: true });
+        await recorder.prepareToRecordAsync();
+        recorder.record();
       }
-      await setAudioModeAsync({ playsInSilentMode: true, allowsRecording: true });
-      await recorder.prepareToRecordAsync();
-      recorder.record();
     } catch (e) {
-      // Say what the browser actually refused with. "Could not start recording"
-      // on its own leaves nothing to act on, and on the web there is no console
-      // in front of most people.
+      // Say why it refused. "Could not start recording" alone leaves nothing to
+      // act on, and on the web there is no console in front of most people.
       const why = String((e && e.message) || 'unknown error');
-      flash('COULD NOT START RECORDING · ' + why.slice(0, 46).toUpperCase());
+      flash((e && e.short) || 'COULD NOT START RECORDING');
       console.error('[deck] could not start recording', e);
       Alert.alert('Could not start recording', why);
       return;

@@ -122,12 +122,17 @@ the token, never from the request body.
   Nothing in the shipped UI imported them; they needed WRON's provider keys.
 - **No privacy policy page.** The Back Panel's link pointed at WRON's policy and
   has been removed. Apple requires a reachable policy before submission.
-- **Web recording needs an input device.** In a browser the deck records through
-  `MediaRecorder` (via `expo-audio`), which needs a microphone and a secure
-  context (https or localhost). A machine with no audio input — most cloud VMs, CI
-  runners — gets `NotFoundError`; the deck says so in its legend and points at the
-  **upload key** in the top bar, which brings an audio file in as a take at the
-  tape head instead. That path needs no microphone at all.
+- **Web recording needs a microphone and https.** In a browser the deck records
+  with its own `MediaRecorder` path ([lib/audio/recordTake.js](lib/audio/recordTake.js))
+  instead of `expo-audio`, because expo-audio answers every web failure with a
+  bare "permission not granted" — the same answer for a page loaded over plain
+  http (where `navigator.mediaDevices` does not exist at all), a browser that was
+  told "block", and a machine with no input device. The deck now names which of
+  those it hit. A page on plain http (for example a phone opening the dev server
+  at `http://192.168.x.x:8081`) cannot be given a microphone by any browser: use
+  the https deployment or open `localhost`. With no input device at all — most
+  cloud VMs, CI runners — the **upload key** in the top bar brings an audio file
+  in as a take at the tape head instead, which needs no microphone.
 - **`Alert` is shimmed on web.** `react-native-web` ships `Alert` as a no-op, so
   confirmations and errors were silent in a browser. `ui/native-shim.js` now maps
   them to the browser's `alert`/`confirm`, which is what makes "Delete session",
