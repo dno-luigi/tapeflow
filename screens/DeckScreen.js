@@ -465,6 +465,65 @@ export default function DeckScreen() {
     onPanResponderRelease: (e, g) => { if (g.dx < -60) nav.navigate('Back Panel'); },
   })).current;
 
+  // Dragging the timeline scrubs the tape.
+  //
+  // The reel is precise but slow across a long reel: a pass that starts at 6:12
+  // should be pointable rather than spun to. Everything read in these handlers
+  // comes off a ref, because a responder is created once and its closures would
+  // otherwise keep the first render's span and layout forever.
+  const stripRef = useRef(null);
+  const stripBox = useRef({ left: 0, width: 300 });
+  const stripMeta = useRef({ span: 60, width: 300 });
+
+  const measureStrip = () => {
+    const node = stripRef.current;
+    if (!node || typeof node.measureInWindow !== 'function') return;
+    node.measureInWindow((x, y, w) => {
+      stripBox.current = { left: x, width: w || stripMeta.current.width };
+    });
+  };
+
+  const headTo = (pageX) => {
+    const box = stripBox.current;
+    const width = box.width || stripMeta.current.width || 300;
+    const frac = Math.max(0, Math.min(1, (pageX - box.left) / Math.max(1, width)));
+    phys.pos = Math.max(0, Math.min(CAPACITY, frac * stripMeta.current.span));
+    // The hand owns the tape head while it is down: the animation loop leaves the
+    // position alone and lets the speed fall away, so the finger is not fighting
+    // the transport for it.
+    phys.dragging = true;
+    phys.lastMoveT = Date.now();
+    setHud({ pos: phys.pos, vel: phys.vel });
+  };
+
+  const stripPan = useRef(
+    PanResponder.create({
+      // Claimed on movement, not on touch-down: a tap still jumps, a cue flag keeps
+      // its hold-to-delete, and a drag anywhere on the strip scrubs.
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: (e, g) => Math.abs(g.dx) > 3,
+      onMoveShouldSetPanResponderCapture: (e, g) => Math.abs(g.dx) > 3,
+      onPanResponderTerminationRequest: () => false,
+      onPanResponderGrant: (e, g) => {
+        if (phys.mode === 'rec') {
+          // Moving the head mid-pass would tear the take being written.
+          phys.stripLocked = true;
+          flash('STOP RECORDING TO SCRUB');
+          return;
+        }
+        phys.stripLocked = false;
+        Haptics.selectionAsync().catch(() => {});
+        headTo(typeof g.moveX === 'number' ? g.moveX : e.nativeEvent.pageX);
+      },
+      onPanResponderMove: (e, g) => {
+        if (phys.stripLocked) return;
+        headTo(typeof g.moveX === 'number' ? g.moveX : e.nativeEvent.pageX);
+      },
+      onPanResponderRelease: () => { phys.dragging = false; phys.stripLocked = false; },
+      onPanResponderTerminate: () => { phys.dragging = false; phys.stripLocked = false; },
+    })
+  ).current;
+
   // Transport
   const onPlay = () => {
     Haptics.selectionAsync().catch(() => {});
@@ -696,6 +755,8 @@ export default function DeckScreen() {
       : 0;
   const spin = angleVal.interpolate({ inputRange: [-360, 360], outputRange: ['-360deg', '360deg'] });
   const px = (sec) => Math.max(0, Math.min(stripW, (sec / span) * stripW));
+  // The strip's scrub handlers read these, and they change with the layout.
+  stripMeta.current = { span, width: stripW };
 
   const setSpeedValue = (v) => {
     let next = clamp(Math.round(v / SPEED_STEP) * SPEED_STEP, SPEED_MIN, SPEED_MAX);
@@ -977,14 +1038,22 @@ export default function DeckScreen() {
           </View>
         </View>
 
-        {/* Tape strip: the whole recording, tap to jump */}
-        <Pressable
-          onPress={(e) => jumpTo((e.nativeEvent.locationX / Math.max(1, stripW)) * span)}
-          onLayout={(e) => setStripW(e.nativeEvent.layout.width || 300)}
+        {/* Tape strip: the whole recording, drag the head to scrub, tap to jump */}
+        <View
+          ref={stripRef}
+          {...stripPan.panHandlers}
+          onLayout={(e) => { setStripW(e.nativeEvent.layout.width || 300); measureStrip(); }}
           style={s.strip}
-          accessibilityRole="adjustable"
-          accessibilityLabel="Recording timeline, tap to jump"
         >
+          {/* Jump-on-tap sits on its own layer so a drag can take the touch from
+              it, while the cue flags above it keep their own press. */}
+          <Pressable
+            onPress={(e) => jumpTo((e.nativeEvent.locationX / Math.max(1, stripW)) * span)}
+            style={StyleSheet.absoluteFill}
+            accessibilityRole="adjustable"
+            accessibilityValue={{ text: fmt(hud.pos) }}
+            accessibilityLabel="Recording timeline, drag to scrub, tap to jump"
+          />
           <View pointerEvents="none" style={[s.stripBar, { backgroundColor: t.accentSoft, borderColor: t.border }]}>
             <View style={{ position: 'absolute', left: 0, width: px(recorded), top: 0, bottom: 0, backgroundColor: t.warning, opacity: 0.35 }} />
             {recording ? (
@@ -992,6 +1061,8 @@ export default function DeckScreen() {
             ) : null}
           </View>
           <View pointerEvents="none" style={[s.playhead, { left: px(hud.pos) - 1, backgroundColor: recording ? t.accent : t.text }]} />
+          {/* A grab handle on the head, so the bar reads as something you pull. */}
+          <View pointerEvents="none" style={[s.grip, { left: px(hud.pos) - 6, borderColor: recording ? t.accent : t.warning, backgroundColor: t.bg }]} />
           {cues.map((c, i) => (
             <Pressable
               key={c.id || i}
@@ -1008,7 +1079,7 @@ export default function DeckScreen() {
             <EngravedText size={10} color={t.textMuted}>0:00</EngravedText>
             <EngravedText size={10} color={t.textMuted}>{fmtShort(span)}</EngravedText>
           </View>
-        </Pressable>
+        </View>
 
         <EngravedText size={12} color={legendMsg ? t.accent : t.textMuted} style={{ textAlign: 'center', marginTop: 4 }}>{legend}</EngravedText>
 
@@ -1122,6 +1193,7 @@ const s = StyleSheet.create({
   strip: { height: 64, marginHorizontal: 20, justifyContent: 'center' },
   stripBar: { height: 14, borderRadius: 3, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden' },
   playhead: { position: 'absolute', width: 2, height: 30, top: 14 },
+  grip: { position: 'absolute', width: 12, height: 12, borderRadius: 6, borderWidth: 1.5, top: 23 },
   flag: { position: 'absolute', top: 2, width: 18, height: 16, borderRadius: 3, alignItems: 'center', justifyContent: 'center' },
   stripLabels: { position: 'absolute', left: 0, right: 0, bottom: 2, flexDirection: 'row', justifyContent: 'space-between' },
   armRow: { height: 56, flexDirection: 'row', marginHorizontal: 12, marginTop: 6, gap: 6 },
