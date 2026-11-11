@@ -118,7 +118,7 @@ the token, never from the request body.
 - **Google and Apple sign-in are removed.** They went through WRON's OAuth
   broker. Restoring them means registering an OAuth client and a callback scheme
   — a separate piece of work, not a flag.
-- **The AI helpers are gone** (chat, vision, transcription, image generation).
+- **The AI helpers are gone** (chat, vision, image generation). Transcription is back, but as one job on a take: the audio is posted to the Worker, which forwards it to whichever speech-to-text service the server is configured with (`ASR_URL`, `ASR_MODEL`, `ASR_API_KEY`), so no provider key ever reaches the browser.
   Nothing in the shipped UI imported them; they needed WRON's provider keys.
 - **No privacy policy page.** The Back Panel's link pointed at WRON's policy and
   has been removed. Apple requires a reachable policy before submission.

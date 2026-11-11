@@ -115,6 +115,7 @@ const StudioContext = createContext({
   deleteTake: () => {},
   addTake: () => {},
   bounceTakes: () => {},
+  setTakeTranscript: () => {},
   addCue: () => {},
   removeCue: () => {},
   updateTrack: () => {},
@@ -392,6 +393,25 @@ export function StudioProvider({ children }) {
     [currentSessionId, patchSession]
   );
 
+  // Kept with the take, not in the screen: a transcript is worth as much as the
+  // audio it came from, and it should still be there when the deck is reopened.
+  const setTakeTranscript = useCallback(
+    (trackIndex, takeId, transcript) => {
+      const id = currentSessionId;
+      if (!id) return;
+      const text = typeof transcript === 'string' && transcript.trim() ? transcript.trim() : null;
+      patchSession(id, (s) => ({
+        ...s,
+        tracks: s.tracks.map((tr, i) =>
+          i === trackIndex
+            ? { ...tr, takes: tr.takes.map((tk) => (tk.id === takeId ? { ...tk, transcript: text } : tk)) }
+            : tr
+        ),
+      }));
+    },
+    [currentSessionId, patchSession]
+  );
+
   const addCue = useCallback(
     (position, sessionId) => {
       const id = sessionId || currentSessionId;
@@ -445,6 +465,7 @@ export function StudioProvider({ children }) {
       deleteTake,
       addTake,
       bounceTakes,
+      setTakeTranscript,
       addCue,
       removeCue,
       updateTrack,
@@ -469,6 +490,7 @@ export function StudioProvider({ children }) {
       deleteTake,
       addTake,
       bounceTakes,
+      setTakeTranscript,
       addCue,
       removeCue,
       updateTrack,

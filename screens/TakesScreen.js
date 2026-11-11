@@ -8,6 +8,7 @@ import { useTheme } from '../ui/theme';
 import { spacing } from '../ui/design-tokens';
 import { useStudio } from '../store/StudioContext';
 import EngravedText from '../components/EngravedText';
+import { canTranscribe, transcribeTake } from '../lib/transcribe';
 
 const W = 360;
 const H = 88;
@@ -43,6 +44,8 @@ export default function TakesScreen({ navigation, route }) {
   const [activeId, setActiveId] = useState(track?.activeTakeId);
   const [playingId, setPlayingId] = useState(null);
   const [notice, setNotice] = useState('');
+  const [transcribing, setTranscribing] = useState(false);
+  const [transcriptError, setTranscriptError] = useState('');
   const playerRef = useRef(null);
 
   const releasePlayer = () => {
@@ -152,6 +155,24 @@ export default function TakesScreen({ navigation, route }) {
     }
   };
 
+  // Words for the active take. The audio is offline in this browser, so the take
+  // is uploaded to the app's own server, which is the only place the speech-to-text
+  // key lives.
+  const onTranscribe = async () => {
+    if (!activeTake || transcribing) return;
+    setTranscriptError('');
+    setTranscribing(true);
+    try {
+      const text = await transcribeTake(activeTake);
+      studio.setTakeTranscript?.(trackIndex, activeTake.id, text);
+      setNotice(`Transcript saved with TAKE ${activeTake.n}`);
+    } catch (e) {
+      setTranscriptError(e?.message || 'Could not transcribe that take.');
+    } finally {
+      setTranscribing(false);
+    }
+  };
+
   const wave = useMemo(() => wavePath(activeTake?.n || 1), [activeTake?.n]);
 
   return (
@@ -242,6 +263,41 @@ export default function TakesScreen({ navigation, route }) {
             </Text>
           ) : null}
 
+          {canTranscribe() ? (
+            <View style={[styles.transcript, { borderColor: t.border }]}>
+              <View style={styles.transcriptHead}>
+                <EngravedText size={11} color={t.textMuted}>TRANSCRIPT</EngravedText>
+                <Pressable
+                  onPress={onTranscribe}
+                  disabled={!activeTake || transcribing}
+                  accessibilityLabel={activeTake ? `Transcribe take ${activeTake.n}` : 'Transcribe a take'}
+                  style={({ pressed }) => [
+                    styles.transcribeBtn,
+                    { borderColor: t.border, opacity: !activeTake ? 0.4 : pressed ? 0.7 : 1 },
+                  ]}
+                >
+                  <Text style={[t.font.label, { color: t.accent, fontSize: 12, lineHeight: 16 }]}>
+                    {transcribing ? 'LISTENING…' : activeTake && activeTake.transcript ? 'TRANSCRIBE AGAIN' : 'TRANSCRIBE TAKE'}
+                  </Text>
+                </Pressable>
+              </View>
+              {activeTake && activeTake.transcript ? (
+                <Text selectable style={[t.font.body, { color: t.text, fontSize: 14, lineHeight: 20 }]}>
+                  {activeTake.transcript}
+                </Text>
+              ) : (
+                <Text style={[t.font.caption, { color: t.textMuted, fontSize: 12, lineHeight: 17 }]}>
+                  {activeTake ? 'No words yet. Transcribe this take to read it back.' : 'Pick a take to transcribe.'}
+                </Text>
+              )}
+              {transcriptError ? (
+                <Text style={[t.font.caption, { color: t.danger, fontSize: 12, lineHeight: 17, marginTop: 6 }]}>
+                  {transcriptError}
+                </Text>
+              ) : null}
+            </View>
+          ) : null}
+
           <View style={styles.actions}>
             <Pressable
               onPress={onBounce}
@@ -317,6 +373,9 @@ const styles = StyleSheet.create({
   },
   play: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
   empty: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 8, padding: 24 },
+  transcript: { marginTop: spacing.md, borderWidth: StyleSheet.hairlineWidth, borderRadius: 8, padding: 12 },
+  transcriptHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
+  transcribeBtn: { minHeight: 32, paddingHorizontal: 12, borderRadius: 16, borderWidth: StyleSheet.hairlineWidth, justifyContent: 'center' },
   actions: { flexDirection: 'row', alignItems: 'center', marginTop: 24, gap: 12 },
   bounce: {
     flex: 1,

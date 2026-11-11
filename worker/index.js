@@ -11,6 +11,8 @@
  * Ownership is always taken from the token, never from the request body.
  */
 
+import { transcribeTake } from './transcribe.js';
+
 const JSON_HEADERS = {
   'content-type': 'application/json; charset=utf-8',
   'cache-control': 'no-store',
@@ -351,12 +353,18 @@ async function handleApi(request, env) {
   if (pathname === '/api/auth/signin' && request.method === 'POST') return signIn(request, env);
 
   // Everything below needs to know who is asking.
-  const user = pathname.startsWith('/api/auth/') || pathname === '/api/db' ? await requireUser(request, env) : null;
+  const needsUser =
+    pathname.startsWith('/api/auth/') || pathname === '/api/db' || pathname === '/api/transcribe';
+  const user = needsUser ? await requireUser(request, env) : null;
 
   if (pathname === '/api/auth/signout' && request.method === 'POST') return signOutRoute(request, env, user);
   if (pathname === '/api/auth/me' && request.method === 'POST') return meRoute(request, env, user);
   if (pathname === '/api/auth/delete' && request.method === 'POST') return deleteAccountRoute(request, env, user);
   if (pathname === '/api/db' && request.method === 'POST') return dbRoute(request, env, user);
+  if (pathname === '/api/transcribe' && request.method === 'POST') {
+    const out = await transcribeTake(request, env, user);
+    return json(out.body, out.status);
+  }
 
   return fail(404, 'not_found', 'No such endpoint.');
 }
