@@ -13,6 +13,7 @@ import { useStudio } from '../store/StudioContext';
 import { createMixer, buildItems, supersedeSkip } from '../lib/audio/TapeMixer';
 import EngravedText from '../components/EngravedText';
 import VUMeter from '../components/VUMeter';
+import TrackLevel from '../components/TrackLevel';
 import { pickAudioFile, canImportAudio } from '../lib/audio/importTake';
 import { micUnavailableReason, startMicTake, stopMicTake, micTakeLevel } from '../lib/audio/recordTake';
 import { renderBounce } from '../lib/audio/bounce';
@@ -1131,6 +1132,15 @@ export default function DeckScreen() {
                 <Text style={[t.font.caption, { color: armed ? t.onAccent : t.textMuted, fontSize: 10, lineHeight: 13, opacity: 0.85 }]}>
                   {armed ? 'REC HERE' : silent ? 'SILENT' : noAudio ? 'NO AUDIO' : n > 0 ? (anyArmed ? 'PLAYS' : n === 1 ? '1 TAKE' : n + ' TAKES') : 'EMPTY'}
                 </Text>
+                {/* The track's level. The mix already used it; this sets it. */}
+                <TrackLevel
+                  index={i}
+                  value={typeof tr.level === 'number' ? tr.level : 0.75}
+                  color={armed ? t.onAccent : glassStroke}
+                  fill={armed ? t.onAccent : t.warning}
+                  onChange={(v) => safe(() => studio.updateTrack && studio.updateTrack(i, { level: v }))}
+                  style={s.trackLevel}
+                />
               </Pressable>
             );
           })}
@@ -1210,7 +1220,8 @@ const s = StyleSheet.create({
   flag: { position: 'absolute', top: 2, width: 18, height: 16, borderRadius: 3, alignItems: 'center', justifyContent: 'center' },
   stripLabels: { position: 'absolute', left: 0, right: 0, bottom: 2, flexDirection: 'row', justifyContent: 'space-between' },
   armRow: { height: 56, flexDirection: 'row', marginHorizontal: 12, marginTop: 6, gap: 6 },
-  arm: { flex: 1, borderRadius: 8, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  arm: { flex: 1, borderRadius: 8, borderWidth: 1, alignItems: 'center', justifyContent: 'center', paddingBottom: 10 },
+  trackLevel: { position: 'absolute', left: 8, right: 8, bottom: 4 },
   cueKey: { width: 56, borderRadius: 8, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   transport: { flexDirection: 'row', height: 64, marginHorizontal: 12, gap: 6, marginTop: 8 },
   key: { flex: 1, height: 64, borderRadius: 10, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
