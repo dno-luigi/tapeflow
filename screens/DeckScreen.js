@@ -714,7 +714,7 @@ export default function DeckScreen() {
   };
 
   // Layout
-  const chrome = insets.top + insets.bottom + 44 + 64 + 40 + 64 + 56 + 64 + 28 + 64;
+  const chrome = insets.top + insets.bottom + 44 + 64 + 40 + 64 + 86 + 64 + 28 + 64;
   const size = Math.max(170, Math.min(W - 32, H - chrome));
   wheelSize.current = size;
 
@@ -1144,6 +1144,7 @@ export default function DeckScreen() {
                   value={typeof tr.level === 'number' ? tr.level : 0.75}
                   color={armed ? t.onAccent : glassStroke}
                   fill={armed ? t.onAccent : t.warning}
+                  textColor={armed ? t.onAccent : t.textMuted}
                   onChange={(v) => safe(() => studio.updateTrack && studio.updateTrack(i, { level: v }))}
                   style={s.trackLevel}
                 />
@@ -1225,10 +1226,10 @@ const s = StyleSheet.create({
   grip: { position: 'absolute', width: 12, height: 12, borderRadius: 6, borderWidth: 1.5, top: 23 },
   flag: { position: 'absolute', top: 2, width: 18, height: 16, borderRadius: 3, alignItems: 'center', justifyContent: 'center' },
   stripLabels: { position: 'absolute', left: 0, right: 0, bottom: 2, flexDirection: 'row', justifyContent: 'space-between' },
-  armRow: { height: 56, flexDirection: 'row', marginHorizontal: 12, marginTop: 6, gap: 6 },
-  arm: { flex: 1, borderRadius: 8, borderWidth: 1, alignItems: 'center', justifyContent: 'center', paddingBottom: 10 },
+  armRow: { height: 86, flexDirection: 'row', marginHorizontal: 12, marginTop: 6, gap: 6 },
+  arm: { flex: 1, borderRadius: 8, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   armKey: { flex: 1, alignSelf: 'stretch', alignItems: 'center', justifyContent: 'center' },
-  trackLevel: { position: 'absolute', left: 8, right: 8, bottom: 4 },
+  trackLevel: { marginHorizontal: 8, marginBottom: 6 },
   cueKey: { width: 56, borderRadius: 8, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   transport: { flexDirection: 'row', height: 64, marginHorizontal: 12, gap: 6, marginTop: 8 },
   key: { flex: 1, height: 64, borderRadius: 10, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
