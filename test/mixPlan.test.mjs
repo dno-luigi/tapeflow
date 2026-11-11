@@ -7,7 +7,7 @@
 // take storage fails here instead of in a session that records silence.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildItems, supersedeSkip } from '../lib/audio/mixPlan.js';
+import { buildItems, supersedeSkip, applyLevelOverride } from '../lib/audio/mixPlan.js';
 import { rememberTakeAudio, resolveTakeUri } from '../lib/audio/takeStore.js';
 
 // A copy of the audio this page holds, and one left over from a page that has
@@ -109,6 +109,23 @@ test('a track level is the volume the mixer plays it at', async () => {
   assert.equal(set(4), 1);
   assert.equal(set(-2), 0);
   assert.equal(set(undefined), 0.85);
+});
+
+test('a fader being dragged is heard before it is saved', () => {
+  const items = [
+    { id: 'a', track: 0, volume: 0.75 },
+    { id: 'b', track: 1, volume: 0.75 },
+  ];
+  const out = applyLevelOverride(items, 1, 0.2);
+  assert.equal(out[1].volume, 0.2, 'the dragged track follows the finger');
+  assert.equal(out[0].volume, 0.75, 'the other tracks are untouched');
+  assert.equal(items[1].volume, 0.75, 'the saved items are not mutated');
+
+  assert.equal(applyLevelOverride(items, 1, 4)[1].volume, 1);
+  assert.equal(applyLevelOverride(items, 1, -1)[1].volume, 0);
+  // Nothing to override: no fader down, or a coordinate that never arrived.
+  assert.equal(applyLevelOverride(items, null, 0.5), items);
+  assert.equal(applyLevelOverride(items, 1, NaN), items);
 });
 
 test('a print carries the tracks it printed', async () => {

@@ -11,6 +11,7 @@ import { AppImage } from '../ui/kit';
 import { ART } from '../constants/artwork';
 import { useStudio } from '../store/StudioContext';
 import { createMixer, buildItems, supersedeSkip } from '../lib/audio/TapeMixer';
+import { applyLevelOverride } from '../lib/audio/mixPlan';
 import EngravedText from '../components/EngravedText';
 import VUMeter from '../components/VUMeter';
 import TrackLevel from '../components/TrackLevel';
@@ -124,6 +125,9 @@ export default function DeckScreen() {
   // Whether the device has been searched for each take's audio yet. Until it has,
   // a take is not "missing", it is simply not loaded.
   const [audioChecked, setAudioChecked] = useState(false);
+  // The fader under the finger, before it is saved: a mix has to be heard while
+  // it is being made, not only once the hand comes off.
+  const [levelDrag, setLevelDrag] = useState(null);
   const [speed, setSpeed] = useState(1);
   const [semis, setSemis] = useState(0);
   const [semisHeard, setSemisHeard] = useState(0);
@@ -216,12 +220,14 @@ export default function DeckScreen() {
     // while it plays. The printed backing and the live one together is the music
     // twice over — the one failure mode a bounce has.
     const skip = supersedeSkip(tracks, p.mode === 'rec' ? p.recTracks : []);
-    const items = buildItems(tracks, skip).map((it) =>
+    const base = buildItems(tracks, skip).map((it) =>
       // A key change plays a pitched copy of the take, rendered once; until that
       // copy is ready the original keeps playing, so the tape never goes silent
       // for it while it renders.
       semisHeard ? { ...it, uri: shiftedUri(it.uri, semisHeard) || it.uri } : it
     );
+    // A fader being dragged is heard as it moves, before it is written down.
+    const items = applyLevelOverride(base, levelDrag ? levelDrag.index : null, levelDrag ? levelDrag.value : NaN);
     try {
       mixerRef.current.sync(items, p.pos, going, rate, lock);
     } catch (e) {
@@ -1145,7 +1151,11 @@ export default function DeckScreen() {
                   color={armed ? t.onAccent : glassStroke}
                   fill={armed ? t.onAccent : t.warning}
                   textColor={armed ? t.onAccent : t.textMuted}
-                  onChange={(v) => safe(() => studio.updateTrack && studio.updateTrack(i, { level: v }))}
+                  onDrag={(v) => setLevelDrag({ index: i, value: v })}
+                  onChange={(v) => {
+                    setLevelDrag(null);
+                    safe(() => studio.updateTrack && studio.updateTrack(i, { level: v }));
+                  }}
                   style={s.trackLevel}
                 />
               </View>

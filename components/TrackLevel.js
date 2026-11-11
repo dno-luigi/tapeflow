@@ -17,13 +17,16 @@ import EngravedText from './EngravedText';
 const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
 const CAP = 10;
 
-export default function TrackLevel({ index, value, color, fill, textColor, style, onChange }) {
+export default function TrackLevel({ index, value, color, fill, textColor, style, onChange, onDrag }) {
   const [drag, setDrag] = useState(null);
   const [boxW, setBoxW] = useState(0);
   const width = useRef(80);
   const next = useRef(value);
   const cb = useRef(onChange);
   cb.current = onChange;
+  const live = useRef(onDrag);
+  live.current = onDrag;
+  const lastSent = useRef(0);
 
   const at = (x) => {
     // A coordinate the platform did not supply must not move the fader: a level of
@@ -32,6 +35,14 @@ export default function TrackLevel({ index, value, color, fill, textColor, style
     const v = clamp01(x / Math.max(1, width.current));
     next.current = v;
     setDrag(v);
+    // Tell the deck as the finger moves, so the balance is heard while it is being
+    // set. Throttled: the mixer ramps over ~40ms, so more often than this is only
+    // extra work.
+    const now = Date.now();
+    if (typeof live.current === 'function' && now - lastSent.current > 50) {
+      lastSent.current = now;
+      live.current(v);
+    }
   };
 
   const pan = useRef(
@@ -42,6 +53,8 @@ export default function TrackLevel({ index, value, color, fill, textColor, style
       onPanResponderGrant: (e) => at(e.nativeEvent.locationX),
       onPanResponderMove: (e) => at(e.nativeEvent.locationX),
       onPanResponderRelease: () => {
+        // The last value goes to the deck too, then the level is saved.
+        if (typeof live.current === 'function') live.current(next.current);
         // Two decimals: a level is a gain, not a measurement.
         if (typeof cb.current === 'function') cb.current(Number(next.current.toFixed(2)));
         setDrag(null);
