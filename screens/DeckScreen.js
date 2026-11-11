@@ -22,6 +22,7 @@ import GlassReel from '../components/GlassReel';
 import { shiftedUri } from '../lib/audio/keyShift';
 import { exportReel, canExport } from '../lib/audio/exportReel';
 import { rememberTakeAudio, hydrateTakeAudio } from '../lib/audio/takeStore';
+import { tapeTimeAt } from '../lib/audio/scrub';
 
 // Wheel physics. One turn of the reel moves SEC_PER_REV seconds of tape at normal speed.
 const NORMAL = 120; // degrees per second at 1x play speed
@@ -484,10 +485,12 @@ export default function DeckScreen() {
   };
 
   const headTo = (pageX) => {
-    const box = stripBox.current;
-    const width = box.width || stripMeta.current.width || 300;
-    const frac = Math.max(0, Math.min(1, (pageX - box.left) / Math.max(1, width)));
-    phys.pos = Math.max(0, Math.min(CAPACITY, frac * stripMeta.current.span));
+    // A coordinate the platform did not supply must not move the head: a head
+    // position of NaN stops the tape, empties the bar and reads NAN:NAN, and the
+    // deck looks dead while it says it is playing.
+    const t = tapeTimeAt(pageX, stripBox.current, stripMeta.current.span);
+    if (t === null) return;
+    phys.pos = Math.max(0, Math.min(CAPACITY, t));
     // The hand owns the tape head while it is down: the animation loop leaves the
     // position alone and lets the speed fall away, so the finger is not fighting
     // the transport for it.
@@ -696,6 +699,7 @@ export default function DeckScreen() {
 
   const jumpTo = (time) => {
     if (mode === 'rec') { flash('STOP RECORDING TO JUMP'); return; }
+    if (!Number.isFinite(time)) return;
     Haptics.selectionAsync().catch(() => {});
     phys.pos = Math.max(0, Math.min(CAPACITY, time));
     setHud({ pos: phys.pos, vel: phys.vel });
@@ -713,7 +717,12 @@ export default function DeckScreen() {
   const size = Math.max(170, Math.min(W - 32, H - chrome));
   wheelSize.current = size;
 
-  const span = Math.max(60, Math.ceil((Math.max(recorded, hud.pos) + 10) / 30) * 30);
+  const span = (() => {
+    // A span that is not a number takes the whole timeline with it, so the deck
+    // keeps a real length whatever the session reports.
+    const reach = Math.max(Number.isFinite(recorded) ? recorded : 0, Number.isFinite(hud.pos) ? hud.pos : 0);
+    return Math.max(60, Math.ceil((reach + 10) / 30) * 30);
+  })();
   const rawSr = Number(settings.sampleRate) || 96;
   const sr = rawSr > 1000 ? Math.round(rawSr / 1000) : rawSr;
   const anyArmed = tracks.some((tr) => tr.armed);
@@ -1048,7 +1057,11 @@ export default function DeckScreen() {
           {/* Jump-on-tap sits on its own layer so a drag can take the touch from
               it, while the cue flags above it keep their own press. */}
           <Pressable
-            onPress={(e) => jumpTo((e.nativeEvent.locationX / Math.max(1, stripW)) * span)}
+            onPress={(e) => {
+              const x = e.nativeEvent.locationX;
+              if (!Number.isFinite(x)) return;
+              jumpTo((x / Math.max(1, stripW)) * span);
+            }}
             style={StyleSheet.absoluteFill}
             accessibilityRole="adjustable"
             accessibilityValue={{ text: fmt(hud.pos) }}
