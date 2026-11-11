@@ -40,7 +40,9 @@ export default function TrackLevel({ index, value, color, fill, style, onChange 
       onPanResponderGrant: (e) => at(e.nativeEvent.locationX),
       onPanResponderMove: (e) => at(e.nativeEvent.locationX),
       onPanResponderRelease: () => {
-        if (typeof cb.current === 'function') cb.current(next.current);
+        // Two decimals: a level is a gain, not a measurement, and one that reads
+        // 46.6381779423% in the store is noise on every sync.
+        if (typeof cb.current === 'function') cb.current(Number(next.current.toFixed(2)));
         setDrag(null);
       },
       onPanResponderTerminate: () => setDrag(null),

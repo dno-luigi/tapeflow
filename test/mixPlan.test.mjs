@@ -94,6 +94,23 @@ test('a source that is not a track is ignored', async () => {
   assert.deepEqual(supersedeSkip(tracks, []), []);
 });
 
+test('a track level is the volume the mixer plays it at', async () => {
+  await live('vol-1');
+  const set = (level) => {
+    const trk = trackWith('vol-1');
+    if (level === undefined) delete trk.level;
+    else trk.level = level;
+    return buildItems([trk], [])[0].volume;
+  };
+  // What the level bar on each key sets, and what the fader is worth: a level is
+  // the gain the take is played at, kept inside 0..1 whatever gets stored.
+  assert.equal(set(0.3), 0.3);
+  assert.equal(set(1), 1);
+  assert.equal(set(4), 1);
+  assert.equal(set(-2), 0);
+  assert.equal(set(undefined), 0.85);
+});
+
 test('a print carries the tracks it printed', async () => {
   await live('bounce-1');
   const items = buildItems([trackWith('bounce-1', [2, 3])], []);

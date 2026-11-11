@@ -1108,14 +1108,9 @@ export default function DeckScreen() {
             // so on the track instead of letting it claim to play.
             const noAudio = !!(audioChecked && activeTake && !silent && !takeAudioReady(activeTake));
             return (
-              <Pressable
+              <View
                 key={i}
-                onPress={() => toggleArm(i)}
-                onLongPress={() => nav.navigate('Takes', { track: i })}
-                delayLongPress={350}
-                accessibilityRole="button"
-                accessibilityLabel={'Track ' + (i + 1) + (armed ? ' armed' : ' not armed') + ', hold for takes'}
-                style={({ pressed }) => [
+                style={[
                   s.arm,
                   {
                     backgroundColor: armed ? t.accent : glassFill,
@@ -1124,14 +1119,25 @@ export default function DeckScreen() {
                     shadowOpacity: armed ? 0.8 : 0,
                     shadowRadius: 10,
                     shadowOffset: { width: 0, height: 0 },
-                    opacity: pressed ? 0.75 : 1,
                   },
                 ]}
               >
-                <Text style={[t.font.label, { color: armed ? t.onAccent : t.textMuted, fontSize: 13, lineHeight: 17 }]}>{'TRK ' + (i + 1)}</Text>
-                <Text style={[t.font.caption, { color: armed ? t.onAccent : t.textMuted, fontSize: 10, lineHeight: 13, opacity: 0.85 }]}>
-                  {armed ? 'REC HERE' : silent ? 'SILENT' : noAudio ? 'NO AUDIO' : n > 0 ? (anyArmed ? 'PLAYS' : n === 1 ? '1 TAKE' : n + ' TAKES') : 'EMPTY'}
-                </Text>
+                {/* The key arms the track. The level bar sits over its lower edge as
+                    a sibling, not inside it: a touch on the fader that also armed the
+                    track would make every level change a recording decision. */}
+                <Pressable
+                  onPress={() => toggleArm(i)}
+                  onLongPress={() => nav.navigate('Takes', { track: i })}
+                  delayLongPress={350}
+                  accessibilityRole="button"
+                  accessibilityLabel={'Track ' + (i + 1) + (armed ? ' armed' : ' not armed') + ', hold for takes'}
+                  style={({ pressed }) => [s.armKey, { opacity: pressed ? 0.75 : 1 }]}
+                >
+                  <Text style={[t.font.label, { color: armed ? t.onAccent : t.textMuted, fontSize: 13, lineHeight: 17 }]}>{'TRK ' + (i + 1)}</Text>
+                  <Text style={[t.font.caption, { color: armed ? t.onAccent : t.textMuted, fontSize: 10, lineHeight: 13, opacity: 0.85 }]}>
+                    {armed ? 'REC HERE' : silent ? 'SILENT' : noAudio ? 'NO AUDIO' : n > 0 ? (anyArmed ? 'PLAYS' : n === 1 ? '1 TAKE' : n + ' TAKES') : 'EMPTY'}
+                  </Text>
+                </Pressable>
                 {/* The track's level. The mix already used it; this sets it. */}
                 <TrackLevel
                   index={i}
@@ -1141,7 +1147,7 @@ export default function DeckScreen() {
                   onChange={(v) => safe(() => studio.updateTrack && studio.updateTrack(i, { level: v }))}
                   style={s.trackLevel}
                 />
-              </Pressable>
+              </View>
             );
           })}
           <Pressable
@@ -1221,6 +1227,7 @@ const s = StyleSheet.create({
   stripLabels: { position: 'absolute', left: 0, right: 0, bottom: 2, flexDirection: 'row', justifyContent: 'space-between' },
   armRow: { height: 56, flexDirection: 'row', marginHorizontal: 12, marginTop: 6, gap: 6 },
   arm: { flex: 1, borderRadius: 8, borderWidth: 1, alignItems: 'center', justifyContent: 'center', paddingBottom: 10 },
+  armKey: { flex: 1, alignSelf: 'stretch', alignItems: 'center', justifyContent: 'center' },
   trackLevel: { position: 'absolute', left: 8, right: 8, bottom: 4 },
   cueKey: { width: 56, borderRadius: 8, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   transport: { flexDirection: 'row', height: 64, marginHorizontal: 12, gap: 6, marginTop: 8 },
