@@ -114,7 +114,15 @@ export default function DeckScreen() {
   // A turn's worth of speed. The reference is one turn a second; the setting
   // scales it, so a hand that wants to spin harder can, and one that wants a
   // touch more speed per turn can have that too.
-  const wheelSens = clamp(Number(settings.wheelSens) || 0.3, 0.1, 4);
+  // 0.3 and 0.6 both shipped as defaults and both buy too little speed per turn. A
+  // deck saved under either is moved to the current default instead of staying
+  // stuck on a number that was never the right one.
+  const storedSens = Number(settings.wheelSens);
+  const wheelSens = clamp(
+    !storedSens || storedSens === 0.3 || storedSens === 0.6 ? 1.2 : storedSens,
+    0.1,
+    4
+  );
   const wheelNormal = DEG_PER_SEC_AT_1X / wheelSens;
   const normalRef = useRef(wheelNormal);
   normalRef.current = wheelNormal;
