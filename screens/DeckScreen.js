@@ -136,7 +136,10 @@ export default function DeckScreen() {
   const wheelSens = clamp(Math.abs(sensRaw) || 0.8, 0.1, 4);
   // How fast a hard spin may take the tape, chosen on the back panel.
   const wheelCeiling = clamp(Math.abs(topRaw) || 3, 1.2, 8);
-  const wheelInvert = (sensRaw < 0) !== (topRaw < 0);
+  // Only the speed-per-turn number decides the direction. The top speed just caps
+  // it: letting its sign flip the reel meant a negative top silently reversed a
+  // reel whose speed number was positive.
+  const wheelInvert = sensRaw < 0;
   const wheelNormal = DEG_PER_SEC_AT_1X / wheelSens;
   const normalRef = useRef(wheelNormal);
   normalRef.current = wheelNormal;
