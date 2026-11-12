@@ -12,6 +12,7 @@ import { ART } from '../constants/artwork';
 import { useStudio } from '../store/StudioContext';
 import { createMixer, buildItems, supersedeSkip } from '../lib/audio/TapeMixer';
 import { applyLevelOverride } from '../lib/audio/mixPlan';
+import { wheelTransport, HAND_MIN, HAND_MAX } from '../lib/audio/wheel';
 import EngravedText from '../components/EngravedText';
 import VUMeter from '../components/VUMeter';
 import TrackLevel from '../components/TrackLevel';
@@ -201,21 +202,20 @@ export default function DeckScreen() {
   // Keeps the speaker in step with the tape: plays each track's active take at
   // the right spot, at the speed the reel is actually turning.
   //
-  // The reel IS the transport. Hold it still and the take stops; drag it slowly
-  // and the take plays back pitched down, flick it and the voice speeds up and
-  // rises, exactly like a hand on a tape spool. Spinning it backwards is a
-  // rewind, which cannot be read backwards, so that is silent while the tape
-  // runs in reverse. Beyond PLAYABLE_X the tape is just spooling.
+  // The reel IS the transport.
+  //
+  // A hand on it sets the speed at that moment: turn it at the song's pace and the
+  // tape runs at its own, turn it faster and it plays faster, turn it slowly and it
+  // still plays — slow and pitched down, like a tape dragged by hand. Spinning it
+  // while the deck is stopped sounds too. Backwards is a rewind, which cannot be
+  // read backwards, so a reversed copy plays instead (lib/audio/ReverseTape).
   syncRef.current = () => {
     const p = phys;
-    const speed = p.vel / NORMAL; // signed: negative is backwards
-    const live = p.mode === 'play' || p.mode === 'rec';
-    const magnitude = Math.abs(speed);
-    // Stopped means silent, however the reel is turning: only a running tape is
-    // heard. Play, and the hand sets the speed in either direction.
-    const going = live && magnitude > 0.12 && magnitude <= PLAYABLE_X;
-    const clamped = Math.min(PLAYABLE_X, Math.max(SLOWEST_X, magnitude));
-    const rate = going ? (speed < 0 ? -1 : 1) * clamped : 0;
+    // The rule that decides what is heard lives on its own so it can be tested:
+    // see lib/audio/wheel.js.
+    const t = wheelTransport({ mode: p.mode, dragging: p.dragging, vel: p.vel });
+    const going = t.playing;
+    const rate = t.rate;
     // A bounced take carries the tracks it printed, so those tracks are left out
     // while it plays. The printed backing and the live one together is the music
     // twice over — the one failure mode a bounce has.
@@ -736,12 +736,12 @@ export default function DeckScreen() {
   const recording = mode === 'rec';
   const display = Math.max(0, hud.pos - offset);
   const speedX = Math.abs(hud.vel) / NORMAL;
-  // Read the wheel out as a speed adjuster, the way the recorder it is modelled
-  // on does: 100% is the tape at its own speed, 50% is half and 200% is double.
-  // The number is clamped to that range, because a hand can flick faster than the
-  // tape is allowed to follow and the readout should say what is being heard.
-  const speedPct = Math.round(Math.min(PLAYABLE_X, Math.max(SLOWEST_X, speedX)) * 100);
   const moving = Math.abs(hud.vel) >= 1;
+  // What is being heard, not only what is set: a hand can turn the reel far slower
+  // or faster than the speed control, and the readout should follow the hand. The
+  // control's own range is 50–200%; a hand may go to 2% or 400%.
+  const shownSpeed = Math.min(HAND_MAX, Math.max(moving ? HAND_MIN : SLOWEST_X, speedX));
+  const speedPct = Math.round(shownSpeed * 100);
   // While the tape is running the reel is the truth, so the readout follows the
   // hand; stopped, it shows the speed the deck is set to. Both are shown at the
   // resolution they are set at — a percent and five cents.
@@ -990,7 +990,7 @@ export default function DeckScreen() {
                 accessibilityLabel={'Speed ' + speedText + ', drag to fine tune'}
               >
                 <EngravedText size={12} color={recording ? t.accent : t.warning}>
-                  {recording ? 'REC · 100%' : moving && speedX > PLAYABLE_X ? 'SPOOLING' : speedText}
+                  {recording ? 'REC · 100%' : moving ? (speedX > HAND_MAX ? 'SPOOLING' : speedPct + '%') : speedText}
                 </EngravedText>
               </View>
               <Pressable
