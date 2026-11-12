@@ -160,8 +160,12 @@ export default function DeckScreen() {
   // PITCH LOCK is the default: the reel is a tempo control first, and the key only
   // rides the speed when the deck is told to behave like a tape.
   const [lock, setLock] = useState(true);
-  const speedRef = useRef(1);
+  // What the wheel's turn does. With the key held it is the tempo; with the key free
+  // it is the pitch, and a turn moves through the key instead of through the tape.
+  const wheelMode = lock ? 'speed' : 'pitch';
   const semisRef = useRef(0);
+  semisRef.current = semis;
+  const speedRef = useRef(1);
   const exportBusy = useRef(false);
 
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
@@ -473,12 +477,16 @@ export default function DeckScreen() {
         return;
       }
       phys.locked = false;
-      phys.dragging = true;
+      phys.dragging = wheelMode === 'speed';
+      // Where the key stands now, so a pitch turn moves from here rather than
+      // snapping to a new place. The whole -12..+12 sweep takes this many degrees,
+      // and the sensitivity sets how many turns that is.
+      phys.pitchAcc = ((semisRef.current + 12) / 24) * (720 / Math.max(0.2, wheelSens));
       setGrabbed(true);
       Haptics.selectionAsync().catch(() => {});
     },
     onPanResponderMove: (e) => {
-      if (phys.locked || !phys.dragging) return;
+      if (phys.locked) return;
       const c = wheelSize.current / 2;
       const { locationX, locationY } = e.nativeEvent;
       const a = (Math.atan2(locationY - c, locationX - c) * 180) / Math.PI;
@@ -489,6 +497,19 @@ export default function DeckScreen() {
       // the opposite direction to mean forward.
       if (wheelInvert) d = -d;
       phys.lastA = a;
+      if (wheelMode === 'pitch') {
+        // Pitch is a knob from -12 to +12 semitones and nothing else moves: the tape
+        // keeps its speed and its place while the key turns under the hand.
+        const sweep = 720 / Math.max(0.2, wheelSens);
+        const next = Math.max(-12, Math.min(12, Math.round((phys.pitchAcc / sweep) * 24) - 12));
+        if (next !== semisRef.current) {
+          semisRef.current = next;
+          Haptics.selectionAsync().catch(() => {});
+          setSemis(next);
+        }
+        return;
+      }
+      if (!phys.dragging) return;
       const now = Date.now();
       const dt = Math.max(8, now - phys.lastMoveT) / 1000;
       phys.lastMoveT = now;
@@ -925,7 +946,7 @@ export default function DeckScreen() {
     Haptics.selectionAsync().catch(() => {});
     const next = !lock;
     setLock(next);
-    flash(next ? 'PITCH LOCK · SPEED KEEPS THE KEY' : 'TAPE PITCH · SPEED BENDS THE KEY');
+    flash(next ? 'WHEEL · SPEED — A TURN MOVES THE TEMPO' : 'WHEEL · PITCH — A TURN MOVES THE KEY');
   };
   const onExport = async () => {
     if (mode === 'rec') { flash('STOP RECORDING FIRST'); return; }
@@ -1108,13 +1129,13 @@ export default function DeckScreen() {
             <Pressable
               accessibilityRole="switch"
               accessibilityState={{ checked: lock }}
-              accessibilityLabel={lock ? 'Pitch lock on: changing the speed keeps the key' : 'Tape pitch: changing the speed bends the key'}
+              accessibilityLabel={lock ? 'Wheel adjusts speed: a spin changes the tempo and the key holds' : 'Wheel adjusts pitch: a spin changes the tempo and the key bends with it'}
               onPress={toggleLock}
             >
-              <GlassPanel radius={16} style={[s.pill, { borderColor: lock ? t.warning : glassStroke }]}>
-                <Ionicons name={lock ? 'lock-closed' : 'lock-open'} size={13} color={lock ? t.warning : t.textMuted} />
-                <EngravedText size={11} color={lock ? t.warning : t.textMuted} style={{ marginLeft: 5 }}>
-                  {lock ? 'PITCH LOCK' : 'TAPE PITCH'}
+              <GlassPanel radius={16} style={[s.pill, { borderColor: lock ? glassStroke : t.accent }]}>
+                <Ionicons name={lock ? 'speedometer-outline' : 'musical-notes-outline'} size={13} color={lock ? t.textMuted : t.accent} />
+                <EngravedText size={10} color={lock ? t.textMuted : t.accent} style={{ marginLeft: 5 }}>
+                  {lock ? 'WHEEL · SPEED' : 'WHEEL · PITCH'}
                 </EngravedText>
               </GlassPanel>
             </Pressable>
