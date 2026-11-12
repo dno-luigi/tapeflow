@@ -141,6 +141,8 @@ export default function DeckScreen() {
   // it: letting its sign flip the reel meant a negative top silently reversed a
   // reel whose speed number was positive.
   const wheelInvert = sensRaw < 0;
+  const invertRef = useRef(wheelInvert);
+  invertRef.current = wheelInvert;
   const wheelNormal = DEG_PER_SEC_AT_1X / wheelSens;
   const normalRef = useRef(wheelNormal);
   normalRef.current = wheelNormal;
@@ -173,6 +175,11 @@ export default function DeckScreen() {
   // What the wheel's turn does. With the key held it is the tempo; with the key free
   // it is the pitch, and a turn moves through the key instead of through the tape.
   const wheelMode = lock ? 'speed' : 'pitch';
+  // The reel's gesture handler is built once and keeps the first render's values, so
+  // the mode it reads has to come from a ref: otherwise flipping the toggle moved the
+  // pill and left the wheel on speed.
+  const modeRef = useRef(wheelMode);
+  modeRef.current = wheelMode;
   const semisRef = useRef(0);
   semisRef.current = semis;
   const speedRef = useRef(1);
@@ -487,7 +494,7 @@ export default function DeckScreen() {
         return;
       }
       phys.locked = false;
-      phys.dragging = wheelMode === 'speed';
+      phys.dragging = modeRef.current === 'speed';
       // Pitch turns move from where the key already stands, and only count the
       // travel made since the hand went down.
       phys.pitchBase = semisRef.current;
@@ -506,7 +513,7 @@ export default function DeckScreen() {
       // The reel can be told to run the other way, for a hand that expects a turn in
       // the opposite direction to mean forward.
       phys.lastA = a;
-      if (wheelMode === 'pitch') {
+      if (modeRef.current === 'pitch') {
         // The wheel is a pitch control here: a tenth of a semitone per full turn,
         // clockwise up and anticlockwise down. Nothing else moves — the tape keeps
         // the speed it was locked at when the toggle was flipped, and its place.
@@ -523,7 +530,7 @@ export default function DeckScreen() {
       }
       // Direction belongs to the speed control; the pitch wheel is always clockwise
       // up, as the hand expects.
-      if (wheelInvert) d = -d;
+      if (invertRef.current) d = -d;
       if (!phys.dragging) return;
       const now = Date.now();
       const dt = Math.max(8, now - phys.lastMoveT) / 1000;
