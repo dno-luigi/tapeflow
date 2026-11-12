@@ -119,7 +119,9 @@ export default function DeckScreen() {
   // stuck on a number that was never the right one.
   const storedSens = Number(settings.wheelSens);
   const wheelSens = clamp(
-    !storedSens || storedSens === 0.3 || storedSens === 0.6 || storedSens === 1.2 ? 0.8 : storedSens,
+    !storedSens || storedSens === 0.3 || storedSens === 0.6 || storedSens === 1 || storedSens === 1.2
+      ? 0.8
+      : storedSens,
     0.1,
     4
   );
