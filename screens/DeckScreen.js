@@ -111,6 +111,13 @@ export default function DeckScreen() {
   const tracks = [0, 1, 2, 3].map((i) => (current && current.tracks && current.tracks[i]) || { armed: false, takes: [] });
   const cues = (current && current.cues) || [];
   const recorded = (current && current.duration) || 0;
+  // A turn's worth of speed. The reference is one turn a second; the setting
+  // scales it, so a hand that wants to spin harder can, and one that wants a
+  // touch more speed per turn can have that too.
+  const wheelSens = clamp(Number(settings.wheelSens) || 1, 0.5, 4);
+  const wheelNormal = DEG_PER_SEC_AT_1X / wheelSens;
+  const normalRef = useRef(wheelNormal);
+  normalRef.current = wheelNormal;
 
   const [mode, setMode] = useState('stop');
   const [hud, setHud] = useState({ pos: 0, vel: 0 });
@@ -215,7 +222,12 @@ export default function DeckScreen() {
     const p = phys;
     // The rule that decides what is heard lives on its own so it can be tested:
     // see lib/audio/wheel.js.
-    const t = wheelTransport({ mode: p.mode, dragging: p.dragging, vel: p.vel });
+    const t = wheelTransport({
+      mode: p.mode,
+      dragging: p.dragging,
+      vel: p.vel,
+      degPerSecAt1x: normalRef.current,
+    });
     const going = t.playing;
     const rate = t.rate;
     // A bounced take carries the tracks it printed, so those tracks are left out
@@ -231,7 +243,10 @@ export default function DeckScreen() {
     // A fader being dragged is heard as it moves, before it is written down.
     const items = applyLevelOverride(base, levelDrag ? levelDrag.index : null, levelDrag ? levelDrag.value : NaN);
     try {
-      mixerRef.current.sync(items, p.pos, going, rate, lock);
+      // A hand on the reel always holds the pitch. Spinning is a tempo control, so
+      // it may speed the song up or slow it down; it may not turn voices into
+      // chipmunks. The TAPE PITCH key still decides for the keys and the tape.
+      mixerRef.current.sync(items, p.pos, going, rate, lock || p.dragging);
     } catch (e) {
       // Never silently: a mixer that throws is a tape that stops sounding.
       console.error('[deck] mixer sync failed', e);
@@ -371,15 +386,15 @@ export default function DeckScreen() {
         if (now - p.lastMoveT > 90) p.vel *= 0.6;
       } else {
         if (p.mode === 'rec') {
-          p.vel = NORMAL;
+          p.vel = normalRef.current;
         } else {
-          const target = p.mode === 'play' ? NORMAL * speedRef.current : MODES[p.mode] || 0;
+          const target = p.mode === 'play' ? normalRef.current * speedRef.current : MODES[p.mode] || 0;
           const k = Math.abs(target) > Math.abs(p.vel) ? 5 : target === 0 ? 1.3 : 2.5;
           p.vel += (target - p.vel) * (1 - Math.exp(-k * dt));
           if (Math.abs(target - p.vel) < 1) p.vel = target;
         }
         p.angle = (p.angle + p.vel * dt) % 360;
-        p.pos += (p.vel / NORMAL) * dt;
+        p.pos += (p.vel / normalRef.current) * dt;
         if (p.pos <= 0) {
           p.pos = 0;
           if (p.vel < 0) p.vel = 0;
@@ -427,6 +442,8 @@ export default function DeckScreen() {
       phys.lastA = (Math.atan2(locationY - c, locationX - c) * 180) / Math.PI;
       phys.lastMoveT = Date.now();
       phys.hapticAcc = 0;
+      phys.samples = [];
+      phys.acc = 0;
       if (phys.mode === 'rec') {
         phys.locked = true;
         flash('STOP RECORDING TO SCRUB');
@@ -451,13 +468,23 @@ export default function DeckScreen() {
       phys.lastMoveT = now;
       phys.angle = (phys.angle + d) % 360;
       angleVal.setValue(phys.angle);
-      // The tape travels only as fast as the audio can follow: past the element's
-      // limit the sound is clamped, so the head is clamped with it or the two drift
-      // apart and the mixer re-cuts the take every few frames.
-      const travel = Math.max(-HAND_MAX, Math.min(HAND_MAX, d / dt / NORMAL)) * dt;
-      phys.pos = Math.max(0, Math.min(CAPACITY, phys.pos + travel));
-      const inst = d / dt;
-      phys.vel = Math.max(-MAXV, Math.min(MAXV, phys.vel * 0.6 + inst * 0.4));
+      // A single fast pointer event is a spike, not a speed. Measure the hand over
+      // a short window and ease the tape towards it, so a steady spin holds a
+      // steady tempo instead of the sound lurching with every sample.
+      phys.acc = (phys.acc || 0) + d;
+      phys.samples = phys.samples || [];
+      phys.samples.push({ t: now, a: phys.acc });
+      while (phys.samples.length > 2 && now - phys.samples[0].t > 160) phys.samples.shift();
+      const first = phys.samples[0];
+      const span = Math.max(0.04, (now - first.t) / 1000);
+      const want = Math.max(-MAXV, Math.min(MAXV, (phys.acc - first.a) / span));
+      const step = 6000 * dt;
+      phys.vel += Math.max(-step, Math.min(step, want - phys.vel));
+      // The reel is a speed control, not a position control. The tape travels at
+      // the speed the sound is playing, never at the speed of the finger: moving
+      // the head by the hand's travel is what made a fast spin skip down the reel.
+      const rate = Math.max(-HAND_MAX, Math.min(HAND_MAX, phys.vel / normalRef.current));
+      phys.pos = Math.max(0, Math.min(CAPACITY, phys.pos + rate * dt));
       phys.hapticAcc += Math.abs(d);
       if (phys.hapticAcc >= 30) {
         phys.hapticAcc = 0;
@@ -710,6 +737,14 @@ export default function DeckScreen() {
     }
   };
 
+  // How much speed a turn is worth is a feel, so the hand turning it decides.
+  const nudgeWheelSens = (dir) => {
+    const next = clamp(Math.round((wheelSens + dir * 0.2) * 10) / 10, 0.5, 4);
+    if (next === wheelSens) return;
+    safe(() => studio.updateSettings && studio.updateSettings({ wheelSens: next }));
+    flash('WHEEL RESPONSE ×' + next.toFixed(1));
+  };
+
   const jumpTo = (time) => {
     if (mode === 'rec') { flash('STOP RECORDING TO JUMP'); return; }
     if (!Number.isFinite(time)) return;
@@ -741,7 +776,7 @@ export default function DeckScreen() {
   const anyArmed = tracks.some((tr) => tr.armed);
   const recording = mode === 'rec';
   const display = Math.max(0, hud.pos - offset);
-  const speedX = Math.abs(hud.vel) / NORMAL;
+  const speedX = Math.abs(hud.vel) / normalRef.current;
   const moving = Math.abs(hud.vel) >= 1;
   // What is being heard, not only what is set: a hand can turn the reel far slower
   // or faster than the speed control, and the readout should follow the hand. The
@@ -1107,7 +1142,30 @@ export default function DeckScreen() {
           </View>
         </View>
 
-        <EngravedText size={12} color={legendMsg ? t.accent : t.textMuted} style={{ textAlign: 'center', marginTop: 4 }}>{legend}</EngravedText>
+        <View style={s.legendRow}>
+          <EngravedText size={12} color={legendMsg ? t.accent : t.textMuted} style={{ textAlign: 'center', flexShrink: 1 }}>
+            {legend}
+          </EngravedText>
+          <View style={s.wheelSens}>
+            <Pressable
+              onPress={() => nudgeWheelSens(-1)}
+              hitSlop={10}
+              accessibilityLabel="Less speed per turn of the reel"
+              style={s.sensKey}
+            >
+              <Text style={[t.font.label, { color: t.textMuted, fontSize: 14, lineHeight: 18 }]}>−</Text>
+            </Pressable>
+            <EngravedText size={10} color={t.textMuted}>{'WHEEL ×' + wheelSens.toFixed(1)}</EngravedText>
+            <Pressable
+              onPress={() => nudgeWheelSens(1)}
+              hitSlop={10}
+              accessibilityLabel="More speed per turn of the reel"
+              style={s.sensKey}
+            >
+              <Text style={[t.font.label, { color: t.textMuted, fontSize: 14, lineHeight: 18 }]}>+</Text>
+            </Pressable>
+          </View>
+        </View>
 
         {/* Arm row and cue */}
         <View style={s.armRow}>
@@ -1241,6 +1299,9 @@ const s = StyleSheet.create({
   playhead: { position: 'absolute', width: 2, height: 30, top: 14 },
   grip: { position: 'absolute', width: 12, height: 12, borderRadius: 6, borderWidth: 1.5, top: 23 },
   flag: { position: 'absolute', top: 2, width: 18, height: 16, borderRadius: 3, alignItems: 'center', justifyContent: 'center' },
+  legendRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginTop: 4, paddingHorizontal: 8, gap: 8 },
+  wheelSens: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  sensKey: { width: 22, height: 22, alignItems: 'center', justifyContent: 'center' },
   stripLabels: { position: 'absolute', left: 0, right: 0, bottom: 2, flexDirection: 'row', justifyContent: 'space-between' },
   armRow: { height: 86, flexDirection: 'row', marginHorizontal: 12, marginTop: 6, gap: 6 },
   arm: { flex: 1, borderRadius: 8, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
