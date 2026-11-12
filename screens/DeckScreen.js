@@ -31,10 +31,13 @@ import { tapeTimeAt } from '../lib/audio/scrub';
 // The one-speed reference comes from the transport rule, so a hand turning at that
 // rate plays the tape at its own speed — the two must be the same number.
 const NORMAL = DEG_PER_SEC_AT_1X; // degrees per second at 1x play speed
-// In WHEEL · PITCH one full turn of the reel moves the key by a tenth of a semitone:
-// clockwise up, anticlockwise down. Ten turns to a semitone, so it is a fine nudge,
-// and the tape keeps the speed it had when the toggle was flipped.
-const PITCH_PER_TURN = 0.1;
+// In WHEEL · PITCH the reel bends the key the way a tape does — by bending the speed
+// — so the change is instant and works on any length of take. It is gentle: a full
+// turn is 1% of speed, about a third of a semitone, so a handful of turns is a nudge
+// and a long haul is an octave.
+const PITCH_RATE_PER_TURN = 0.01;
+const PITCH_TRIM_MIN = 0.5;
+const PITCH_TRIM_MAX = 2;
 const SEC_PER_REV = 360 / NORMAL;
 const MAXV = 1440; // 12x
 // The reel's varispeed range, the same one the field recorder it is modelled on
@@ -172,6 +175,10 @@ export default function DeckScreen() {
   // PITCH LOCK is the default: the reel is a tempo control first, and the key only
   // rides the speed when the deck is told to behave like a tape.
   const [lock, setLock] = useState(true);
+  // How far the pitch wheel has bent the tape. 1 is the tape's own speed.
+  const [pitchTrim, setPitchTrim] = useState(1);
+  const trimRef = useRef(1);
+  trimRef.current = pitchTrim;
   // What the wheel's turn does. With the key held it is the tempo; with the key free
   // it is the pitch, and a turn moves through the key instead of through the tape.
   const wheelMode = lock ? 'speed' : 'pitch';
@@ -268,8 +275,13 @@ export default function DeckScreen() {
       degPerSecAt1x: normalRef.current,
       ceiling: wheelCeiling,
     });
-    const going = t.playing;
-    const rate = t.rate;
+    // Tape pitch: the reel bends the key by bending the speed, so the key and the
+    // tempo move together and nothing has to be rendered. Only the wheel's bend is
+    // added on top; the transport's own speed is untouched by it.
+    const pitchMode = wheelMode === 'pitch';
+    const transport = p.mode === 'play' || p.mode === 'rec';
+    const going = pitchMode ? transport : t.playing;
+    const rate = pitchMode ? (transport ? speedRef.current * trimRef.current : 0) : t.rate;
     // A bounced take carries the tracks it printed, so those tracks are left out
     // while it plays. The printed backing and the live one together is the music
     // twice over — the one failure mode a bounce has.
@@ -286,7 +298,9 @@ export default function DeckScreen() {
       // The TAPE PITCH key governs the reel as well as the tape: with it on, a spin
       // keeps the key and only the tempo moves; with it off, the key rides the speed
       // the way a tape does.
-      mixerRef.current.sync(items, p.pos, going, rate, lock);
+      // In pitch mode the key is meant to bend with the speed, so the mixer is asked
+      // for tape pitch rather than a held key.
+      mixerRef.current.sync(items, p.pos, going, rate, lock && !pitchMode);
     } catch (e) {
       // Never silently: a mixer that throws is a tape that stops sounding.
       console.error('[deck] mixer sync failed', e);
@@ -429,7 +443,8 @@ export default function DeckScreen() {
         if (p.mode === 'rec') {
           p.vel = normalRef.current;
         } else {
-          const target = p.mode === 'play' ? normalRef.current * speedRef.current : MODES[p.mode] || 0;
+          const trim = modeRef.current === 'pitch' ? trimRef.current : 1;
+          const target = p.mode === 'play' ? normalRef.current * speedRef.current * trim : MODES[p.mode] || 0;
           // Speeding up is quick (the hand has already asked for it); slowing down
           // and settling after a spin glide, so letting go sounds like the reel
           // finding its speed rather than the tape being snatched back.
@@ -495,10 +510,8 @@ export default function DeckScreen() {
       }
       phys.locked = false;
       phys.dragging = modeRef.current === 'speed';
-      // Pitch turns move from where the key already stands, and only count the
-      // travel made since the hand went down.
-      phys.pitchBase = semisRef.current;
-      phys.pitchAcc = 0;
+      // Pitch turns count the travel made since the hand went down.
+      phys.trimAcc = 0;
       setGrabbed(true);
       Haptics.selectionAsync().catch(() => {});
     },
@@ -514,17 +527,16 @@ export default function DeckScreen() {
       // the opposite direction to mean forward.
       phys.lastA = a;
       if (modeRef.current === 'pitch') {
-        // The wheel is a pitch control here: a tenth of a semitone per full turn,
-        // clockwise up and anticlockwise down. Nothing else moves — the tape keeps
-        // the speed it was locked at when the toggle was flipped, and its place.
-        phys.pitchAcc = (phys.pitchAcc || 0) + d;
+        // Tape pitch: the reel bends the speed, and the key bends with it. Clockwise
+        // up, anticlockwise down, a hundredth of the tape's speed per turn.
+        phys.trimAcc = (phys.trimAcc || 0) + d;
         const next = Math.max(
-          -12,
-          Math.min(12, Math.round((phys.pitchBase + (phys.pitchAcc / 360) * PITCH_PER_TURN) * 10) / 10)
+          PITCH_TRIM_MIN,
+          Math.min(PITCH_TRIM_MAX, 1 + (phys.trimAcc / 360) * PITCH_RATE_PER_TURN)
         );
-        if (next !== semisRef.current) {
-          semisRef.current = next;
-          setSemis(next);
+        if (Math.abs(next - trimRef.current) > 0.0005) {
+          trimRef.current = next;
+          setPitchTrim(next);
         }
         return;
       }
@@ -968,17 +980,19 @@ export default function DeckScreen() {
     Haptics.selectionAsync().catch(() => {});
     const next = !lock;
     if (next) {
-      // Freeing the key freezes the speed where the control has it, and lets go of any
-      // hand that was on the reel: from here the wheel moves the pitch and nothing
-      // else. It must not capture the reel's momentary speed — that started a stopped
-      // tape at half speed and slowed a playing one at the moment of the switch.
+      // Let go of any hand that was on the reel, and start the pitch bend from the
+      // tape's own speed. The transport keeps its own speed; the reel only adds a
+      // bend on top, and leaving the mode removes it again.
       phys.dragging = false;
+      phys.trimAcc = 0;
+      trimRef.current = 1;
+      setPitchTrim(1);
     }
     setLock(next);
     flash(
       next
         ? 'WHEEL · SPEED — A TURN MOVES THE TEMPO'
-        : 'WHEEL · PITCH — SPEED LOCKED, A TURN MOVES THE KEY'
+        : 'WHEEL · PITCH — A TURN BENDS THE KEY, TEMPO FOLLOWS'
     );
   };
   const onExport = async () => {
