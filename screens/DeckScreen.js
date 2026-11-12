@@ -114,7 +114,7 @@ export default function DeckScreen() {
   // A turn's worth of speed. The reference is one turn a second; the setting
   // scales it, so a hand that wants to spin harder can, and one that wants a
   // touch more speed per turn can have that too.
-  const wheelSens = clamp(Number(settings.wheelSens) || 0.6, 0.5, 4);
+  const wheelSens = clamp(Number(settings.wheelSens) || 0.3, 0.1, 4);
   const wheelNormal = DEG_PER_SEC_AT_1X / wheelSens;
   const normalRef = useRef(wheelNormal);
   normalRef.current = wheelNormal;
@@ -745,7 +745,7 @@ export default function DeckScreen() {
 
   // How much speed a turn is worth is a feel, so the hand turning it decides.
   const nudgeWheelSens = (dir) => {
-    const next = clamp(Math.round((wheelSens + dir * 0.2) * 10) / 10, 0.5, 4);
+    const next = clamp(Math.round((wheelSens + dir * 0.1) * 10) / 10, 0.1, 4);
     if (next === wheelSens) return;
     safe(() => studio.updateSettings && studio.updateSettings({ wheelSens: next }));
     flash('WHEEL RESPONSE ×' + next.toFixed(1));

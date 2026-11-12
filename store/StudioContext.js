@@ -15,9 +15,10 @@ const DEFAULT_SETTINGS = {
   // pass has to stand on its own and wrong while the tracks are still being edited.
   bounce: false,
   masterTape: false,
-  // How much speed a turn of the reel is worth. Larger is twitchier: at 0.6 a
-  // brisk turn is 1x, and the deck's WHEEL stepper moves it from 0.5 to 4.
-  wheelSens: 0.6,
+  // How much speed a turn of the reel is worth. Larger is twitchier: at 0.3 a
+  // turn buys half the speed it used to, and the deck's WHEEL stepper moves it
+  // from 0.1 to 4.
+  wheelSens: 0.3,
   reminderOn: false,
   reminderTime: { hour: 19, minute: 0 },
   reminderDays: [1, 2, 3, 4, 5],
