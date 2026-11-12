@@ -102,6 +102,15 @@ test('the mixer cannot clamp what the hand asks for', () => {
   assert.ok(wheelTransport({ mode: 'stop', dragging: true, vel: turn(0.1) }).rate >= ELEMENT_MIN);
 });
 
+test('the deck can set the top speed a hard spin reaches', () => {
+  const at = (ceiling) => wheelTransport({ mode: 'play', dragging: true, vel: turn(20), ceiling }).rate;
+  assert.ok(at(2) <= 2 && at(2) > 1.9, 'a low top holds a fling near 2x');
+  assert.ok(at(6) <= 6 && at(6) > 5.5, 'a high top lets a fling reach further');
+  // A nonsense ceiling falls back to the default rather than removing the limit.
+  assert.ok(Math.abs(at(NaN) - HAND_CEILING) < 0.01);
+  assert.ok(Math.abs(at(0.5) - HAND_CEILING) < 0.01);
+});
+
 test('the hand sets the direction', () => {
   assert.equal(wheelTransport({ mode: 'stop', dragging: true, vel: -turn(1) }).rate, -1);
   assert.equal(wheelTransport({ mode: 'play', dragging: true, vel: -turn(0.5) }).rate, -0.5);

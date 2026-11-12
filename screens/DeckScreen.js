@@ -123,6 +123,8 @@ export default function DeckScreen() {
     0.1,
     4
   );
+  // How fast a hard spin may take the tape, chosen on the back panel.
+  const wheelCeiling = clamp(Number(settings.wheelCeiling) || 3, 1.2, 8);
   const wheelNormal = DEG_PER_SEC_AT_1X / wheelSens;
   const normalRef = useRef(wheelNormal);
   normalRef.current = wheelNormal;
@@ -237,6 +239,7 @@ export default function DeckScreen() {
       dragging: p.dragging,
       vel: p.vel,
       degPerSecAt1x: normalRef.current,
+      ceiling: wheelCeiling,
     });
     const going = t.playing;
     const rate = t.rate;
@@ -504,6 +507,7 @@ export default function DeckScreen() {
         dragging: true,
         vel: phys.vel,
         degPerSecAt1x: normalRef.current,
+        ceiling: wheelCeiling,
       }).rate;
       phys.pos = Math.max(0, Math.min(CAPACITY, phys.pos + rate * dt));
       phys.hapticAcc += Math.abs(d);
@@ -756,17 +760,6 @@ export default function DeckScreen() {
       safe(() => studio.addCue(phys.pos));
       flash('CUE MARKED AT ' + fmtShort(phys.pos));
     }
-  };
-
-  // How much speed a turn is worth is a feel, so the hand turning it decides.
-  const nudgeWheelSens = (dir) => {
-    // Tenths below 1 where the low end is delicate, four tenths above it so the
-    // top of the range is seven taps away rather than thirty.
-    const step = wheelSens < 1 ? 0.1 : 0.4;
-    const next = clamp(Math.round((wheelSens + dir * step) * 10) / 10, 0.1, 4);
-    if (next === wheelSens) return;
-    safe(() => studio.updateSettings && studio.updateSettings({ wheelSens: next }));
-    flash('WHEEL RESPONSE ×' + next.toFixed(1));
   };
 
   const jumpTo = (time) => {
@@ -1166,30 +1159,7 @@ export default function DeckScreen() {
           </View>
         </View>
 
-        <View style={s.legendRow}>
-          <EngravedText size={12} color={legendMsg ? t.accent : t.textMuted} style={{ textAlign: 'center', flexShrink: 1 }}>
-            {legend}
-          </EngravedText>
-          <View style={s.wheelSens}>
-            <Pressable
-              onPress={() => nudgeWheelSens(-1)}
-              hitSlop={10}
-              accessibilityLabel="Less speed per turn of the reel"
-              style={s.sensKey}
-            >
-              <Text style={[t.font.label, { color: t.textMuted, fontSize: 14, lineHeight: 18 }]}>−</Text>
-            </Pressable>
-            <EngravedText size={10} color={t.textMuted}>{'WHEEL ×' + wheelSens.toFixed(1)}</EngravedText>
-            <Pressable
-              onPress={() => nudgeWheelSens(1)}
-              hitSlop={10}
-              accessibilityLabel="More speed per turn of the reel"
-              style={s.sensKey}
-            >
-              <Text style={[t.font.label, { color: t.textMuted, fontSize: 14, lineHeight: 18 }]}>+</Text>
-            </Pressable>
-          </View>
-        </View>
+        <EngravedText size={12} color={legendMsg ? t.accent : t.textMuted} style={{ textAlign: 'center', marginTop: 4 }}>{legend}</EngravedText>
 
         {/* Arm row and cue */}
         <View style={s.armRow}>
@@ -1323,9 +1293,6 @@ const s = StyleSheet.create({
   playhead: { position: 'absolute', width: 2, height: 30, top: 14 },
   grip: { position: 'absolute', width: 12, height: 12, borderRadius: 6, borderWidth: 1.5, top: 23 },
   flag: { position: 'absolute', top: 2, width: 18, height: 16, borderRadius: 3, alignItems: 'center', justifyContent: 'center' },
-  legendRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginTop: 4, paddingHorizontal: 8, gap: 8 },
-  wheelSens: { flexDirection: 'row', alignItems: 'center', gap: 2 },
-  sensKey: { width: 22, height: 22, alignItems: 'center', justifyContent: 'center' },
   stripLabels: { position: 'absolute', left: 0, right: 0, bottom: 2, flexDirection: 'row', justifyContent: 'space-between' },
   armRow: { height: 86, flexDirection: 'row', marginHorizontal: 12, marginTop: 6, gap: 6 },
   arm: { flex: 1, borderRadius: 8, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },

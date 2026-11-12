@@ -18,6 +18,9 @@ const DEFAULT_SETTINGS = {
   // How much speed a turn of the reel is worth. Larger is twitchier: at 0.8 a turn
   // and a quarter is 1x, and the deck's WHEEL stepper moves it from 0.1 to 4.
   wheelSens: 0.8,
+  // The fastest a hand on the reel can take the tape. Set on the back panel; a hard
+  // spin approaches this instead of running away.
+  wheelCeiling: 3,
   reminderOn: false,
   reminderTime: { hour: 19, minute: 0 },
   reminderDays: [1, 2, 3, 4, 5],

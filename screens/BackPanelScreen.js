@@ -20,6 +20,7 @@ const WEEKDAY_NUM = { Mon: 2, Tue: 3, Wed: 4, Thu: 5, Fri: 6 };
 const INPUTS = ['INTERNAL MIC', 'USB-C'];
 const RATES = ['48 kHz', '96 kHz'];
 const pad = (n) => String(n).padStart(2, '0');
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
 function parseTime(s) {
   const m = /^(\d{1,2}):(\d{2})$/.exec(String(s || ''));
@@ -167,6 +168,40 @@ export default function BackPanelScreen() {
 
   const amber = t.accents?.[0] || t.warning;
 
+  // The reel's two numbers. They are a feel, and only the hand that spins it can
+  // decide, so they live here rather than being guessed at in code.
+  const sens = clamp(Number(settings.wheelSens) || 0.8, 0.1, 4);
+  const ceiling = clamp(Number(settings.wheelCeiling) || 3, 1.2, 8);
+  const stepWheel = (key, dir) => {
+    buzz();
+    if (!updateSettings) return;
+    if (key === 'wheelSens') {
+      const step = sens < 1 ? 0.1 : 0.2;
+      updateSettings({ wheelSens: Math.round(clamp(sens + dir * step, 0.1, 4) * 10) / 10 });
+    } else {
+      updateSettings({ wheelCeiling: Math.round(clamp(ceiling + dir * 0.5, 1.2, 8) * 10) / 10 });
+    }
+  };
+  const wheelRow = (key, title, helper, value) => (
+    <View style={[styles.reelRow, { borderColor: t.border, backgroundColor: t.surface }]}>
+      <View style={{ flex: 1, paddingRight: 12 }}>
+        <EngravedText size={12} color={t.text}>{title}</EngravedText>
+        <EngravedText size={10} color={t.textMuted}>{helper}</EngravedText>
+      </View>
+      <View style={styles.stepper}>
+        <Pressable onPress={() => stepWheel(key, -1)} accessibilityRole="button" hitSlop={8}
+          accessibilityLabel={`Lower ${title.toLowerCase()}`} style={styles.stepKey}>
+          <Ionicons name="remove" size={18} color={t.textMuted} />
+        </Pressable>
+        <EngravedText size={14} color={amber} style={{ width: 54, textAlign: 'center' }}>{value}</EngravedText>
+        <Pressable onPress={() => stepWheel(key, 1)} accessibilityRole="button" hitSlop={8}
+          accessibilityLabel={`Raise ${title.toLowerCase()}`} style={styles.stepKey}>
+          <Ionicons name="add" size={18} color={t.textMuted} />
+        </Pressable>
+      </View>
+    </View>
+  );
+
   const Key = ({ label, icon, onPress }) => (
     <Pressable onPress={onPress} accessibilityRole="button" accessibilityLabel={label}
       style={({ pressed }) => [styles.key, { backgroundColor: t.accents?.[3] || t.surface, borderColor: t.border, opacity: pressed ? 0.7 : 1 }]}>
@@ -253,6 +288,12 @@ export default function BackPanelScreen() {
               </View>
             ))}
           </View>
+        </Section>
+
+        <Section title="REEL" t={t}>
+          {wheelRow('wheelSens', 'SPEED PER TURN', 'Higher is twitchier: a turn buys more tape speed.', sens.toFixed(1) + '×')}
+          <View style={{ height: 10 }} />
+          {wheelRow('wheelCeiling', 'TOP SPEED', 'A hard spin stops here instead of running away.', ceiling.toFixed(1) + '×')}
         </Section>
 
         <Section title="REMINDER" t={t}>
@@ -354,6 +395,9 @@ const styles = StyleSheet.create({
   vu: { width: 84, height: 52, alignItems: 'center', justifyContent: 'center' },
   timeRow: { marginTop: 12, minHeight: 48, borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   chips: { flexDirection: 'row', gap: 8, marginTop: 12 },
+  reelRow: { minHeight: 62, borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, paddingHorizontal: 14, paddingVertical: 10, flexDirection: 'row', alignItems: 'center' },
+  stepper: { flexDirection: 'row', alignItems: 'center' },
+  stepKey: { width: 36, height: 40, alignItems: 'center', justifyContent: 'center' },
   chip: { flex: 1, minHeight: 44, borderRadius: 999, borderWidth: StyleSheet.hairlineWidth, alignItems: 'center', justifyContent: 'center' },
   key: { flex: 1, height: 56, borderRadius: 14, borderWidth: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
   account: { marginTop: 16, borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, padding: 12, flexDirection: 'row', alignItems: 'center', minHeight: 56 },
