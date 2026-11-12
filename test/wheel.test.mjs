@@ -7,7 +7,14 @@
 // the hand is allowed.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { wheelTransport, DEG_PER_SEC_AT_1X, HAND_MIN, HAND_MAX } from '../lib/audio/wheel.js';
+import {
+  wheelTransport,
+  DEG_PER_SEC_AT_1X,
+  HAND_MIN,
+  HAND_MAX,
+  ELEMENT_MIN,
+  ELEMENT_MAX,
+} from '../lib/audio/wheel.js';
 
 const turn = (fraction) => DEG_PER_SEC_AT_1X * fraction;
 
@@ -50,6 +57,15 @@ test('holding the reel still is silence', () => {
   assert.equal(wheelTransport({ mode: 'play', dragging: true, vel: 0 }).playing, false);
   assert.equal(wheelTransport({ mode: 'play', dragging: true, vel: turn(0.01) }).playing, false);
   assert.equal(wheelTransport({ mode: 'stop', dragging: true, vel: HAND_MIN * DEG_PER_SEC_AT_1X }).playing, true);
+});
+
+test('the mixer cannot clamp what the hand asks for', () => {
+  // The mixer bounds playback to what a media element can do. The hand's range has
+  // to fit inside that bound, or a slow spin comes out speeded up and the wheel
+  // feels disconnected from the sound — which is exactly what it did.
+  assert.ok(HAND_MIN >= ELEMENT_MIN, 'a slow hand must be playable, not clamped');
+  assert.ok(HAND_MAX <= ELEMENT_MAX, 'a fast hand must not exceed the element');
+  assert.ok(wheelTransport({ mode: 'stop', dragging: true, vel: turn(0.1) }).rate >= ELEMENT_MIN);
 });
 
 test('the hand sets the direction', () => {
