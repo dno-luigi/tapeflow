@@ -753,7 +753,10 @@ export default function DeckScreen() {
 
   // How much speed a turn is worth is a feel, so the hand turning it decides.
   const nudgeWheelSens = (dir) => {
-    const next = clamp(Math.round((wheelSens + dir * 0.1) * 10) / 10, 0.1, 4);
+    // Tenths below 1 where the low end is delicate, four tenths above it so the
+    // top of the range is seven taps away rather than thirty.
+    const step = wheelSens < 1 ? 0.1 : 0.4;
+    const next = clamp(Math.round((wheelSens + dir * step) * 10) / 10, 0.1, 4);
     if (next === wheelSens) return;
     safe(() => studio.updateSettings && studio.updateSettings({ wheelSens: next }));
     flash('WHEEL RESPONSE ×' + next.toFixed(1));
