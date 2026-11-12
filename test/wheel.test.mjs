@@ -12,6 +12,7 @@ import {
   DEG_PER_SEC_AT_1X,
   HAND_MIN,
   HAND_MAX,
+  HAND_CEILING,
   ELEMENT_MIN,
   ELEMENT_MAX,
 } from '../lib/audio/wheel.js';
@@ -30,11 +31,12 @@ test('calibration: one turn a second is normal speed', () => {
   // ceiling.
   const at = (degPerSec) => wheelTransport({ mode: 'play', dragging: true, vel: degPerSec }).rate;
   assert.equal(at(360), 1);
-  assert.equal(at(720), 2);
   assert.equal(at(180), 0.5);
   assert.equal(at(90), 0.25);
-  // Faster than the element can go still sounds, at the element's limit.
-  assert.equal(at(3600), 8);
+  // Above the tape's own speed the hand is compressed, so a spin that is twice the
+  // calibration is a little under twice the speed — and no spin passes the ceiling.
+  assert.ok(at(720) > 1.8 && at(720) < 2, 'twice the turn is a little under twice the speed');
+  assert.ok(at(3600) <= HAND_CEILING && at(3600) > 2.9, 'a fling approaches the ceiling, never passes it');
 });
 
 test('a slow hand still sounds — slowly', () => {
@@ -45,13 +47,18 @@ test('a slow hand still sounds — slowly', () => {
   assert.equal(wheelTransport({ mode: 'play', dragging: true, vel: turn(0.3) }).rate, 0.3);
 });
 
-test('a fast hand plays fast, up to the tape’s limit', () => {
-  assert.equal(wheelTransport({ mode: 'stop', dragging: true, vel: turn(2) }).rate, 2);
-  assert.equal(wheelTransport({ mode: 'stop', dragging: true, vel: turn(3) }).rate, 3);
-  // Beyond the limit it is still heard, not silenced.
+test('a fast hand plays fast, but a fling does not run away', () => {
+  const at = (f) => wheelTransport({ mode: 'stop', dragging: true, vel: turn(f) }).rate;
+  assert.ok(at(2) > 1.8 && at(2) < 2);
+  assert.ok(at(3) > 2.5 && at(3) <= HAND_CEILING);
+  // Harder spins still climb, but by less and less: this is the complaint that a
+  // fast spin went too fast, and the reason the top is compressed.
+  assert.ok(at(4) > at(2));
+  assert.ok(at(6) - at(4) < at(4) - at(2), 'each extra turn buys less speed than the last');
+  // Beyond the limit it is still heard, never silenced.
   const flung = wheelTransport({ mode: 'stop', dragging: true, vel: turn(9) });
   assert.equal(flung.playing, true);
-  assert.equal(flung.rate, HAND_MAX);
+  assert.ok(Math.abs(flung.rate - HAND_CEILING) < 0.01);
 });
 
 test('spinning a stopped tape sounds, and letting go stops it', () => {
@@ -70,6 +77,20 @@ test('holding the reel still is silence', () => {
   assert.equal(wheelTransport({ mode: 'play', dragging: true, vel: 0 }).playing, false);
   assert.equal(wheelTransport({ mode: 'play', dragging: true, vel: turn(0.01) }).playing, false);
   assert.equal(wheelTransport({ mode: 'stop', dragging: true, vel: HAND_MIN * DEG_PER_SEC_AT_1X }).playing, true);
+});
+
+test('the deck can set how much speed a turn is worth', () => {
+  // The default reference is one turn a second; a deck with a different sensitivity
+  // passes its own. More speed per turn means a smaller base.
+  const at = (vel, base) => wheelTransport({ mode: 'play', dragging: true, vel, degPerSecAt1x: base }).rate;
+  assert.equal(at(200, 200), 1);
+  assert.ok(Math.abs(at(400, 200) - 1.92) < 0.02, 'twice the hand speed, compressed');
+  assert.ok(Math.abs(at(200, 100) - 1.92) < 0.02, 'half the base is the same request');
+  assert.equal(at(200, 400), 0.5);
+  assert.equal(at(360), 1, 'with no base given, one turn a second is 1x');
+  // A nonsense base falls back to the reference rather than dividing by zero.
+  assert.equal(at(360, 0), 1);
+  assert.equal(at(360, NaN), 1);
 });
 
 test('the mixer cannot clamp what the hand asks for', () => {

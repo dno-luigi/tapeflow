@@ -119,7 +119,7 @@ export default function DeckScreen() {
   // stuck on a number that was never the right one.
   const storedSens = Number(settings.wheelSens);
   const wheelSens = clamp(
-    !storedSens || storedSens === 0.3 || storedSens === 0.6 ? 1.2 : storedSens,
+    !storedSens || storedSens === 0.3 || storedSens === 0.6 || storedSens === 1.2 ? 0.8 : storedSens,
     0.1,
     4
   );
@@ -497,7 +497,14 @@ export default function DeckScreen() {
       // The reel is a speed control, not a position control. The tape travels at
       // the speed the sound is playing, never at the speed of the finger: moving
       // the head by the hand's travel is what made a fast spin skip down the reel.
-      const rate = Math.max(-HAND_MAX, Math.min(HAND_MAX, phys.vel / normalRef.current));
+      // The rate is the one the transport will actually play, shaping included, so
+      // the head can never outrun what is coming out of the speaker.
+      const rate = wheelTransport({
+        mode: phys.mode,
+        dragging: true,
+        vel: phys.vel,
+        degPerSecAt1x: normalRef.current,
+      }).rate;
       phys.pos = Math.max(0, Math.min(CAPACITY, phys.pos + rate * dt));
       phys.hapticAcc += Math.abs(d);
       if (phys.hapticAcc >= 30) {
