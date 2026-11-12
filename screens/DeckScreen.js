@@ -22,6 +22,7 @@ import { renderBounce } from '../lib/audio/bounce';
 import { takeAudioReady } from '../lib/audio/takeStore';
 import { ObsidianBackdrop, GlassPanel, GlassSpecular, glassStroke, glassFill } from '../ui/glass';
 import GlassReel from '../components/GlassReel';
+import Slider from '../components/Slider';
 import { shiftedUri } from '../lib/audio/keyShift';
 import { exportReel, canExport } from '../lib/audio/exportReel';
 import { rememberTakeAudio, hydrateTakeAudio } from '../lib/audio/takeStore';
@@ -31,11 +32,9 @@ import { tapeTimeAt } from '../lib/audio/scrub';
 // The one-speed reference comes from the transport rule, so a hand turning at that
 // rate plays the tape at its own speed — the two must be the same number.
 const NORMAL = DEG_PER_SEC_AT_1X; // degrees per second at 1x play speed
-// In WHEEL · PITCH the reel bends the key the way a tape does — by bending the speed
-// — so the change is instant and works on any length of take. It is gentle: a full
-// turn is 1% of speed, about a third of a semitone, so a handful of turns is a nudge
-// and a long haul is an octave.
-const PITCH_RATE_PER_TURN = 0.01;
+// The PITCH slider bends the tape's speed, so the key bends with it the way a tape
+// does: instant, and it works on a take of any length. The range is deliberately
+// gentle — half speed to double is an octave either way.
 const PITCH_TRIM_MIN = 0.5;
 const PITCH_TRIM_MAX = 2;
 const SEC_PER_REV = 360 / NORMAL;
@@ -175,18 +174,14 @@ export default function DeckScreen() {
   // PITCH LOCK is the default: the reel is a tempo control first, and the key only
   // rides the speed when the deck is told to behave like a tape.
   const [lock, setLock] = useState(true);
-  // How far the pitch wheel has bent the tape. 1 is the tape's own speed. It lives in
-  // a ref on purpose: this changes on every pointer event, and putting it in state
-  // re-rendered the whole deck dozens of times a second, which is what froze it.
+  // The PITCH slider bends the tape's speed, so the key bends with it. 1 is no bend,
+  // and it is a ref because the transport reads it every frame: putting it in state
+  // re-rendered the whole deck dozens of times a second and froze it.
   const trimRef = useRef(1);
+  const [pitchUI, setPitchUI] = useState(1);
   // What the wheel's turn does. With the key held it is the tempo; with the key free
   // it is the pitch, and a turn moves through the key instead of through the tape.
-  const wheelMode = lock ? 'speed' : 'pitch';
-  // The reel's gesture handler is built once and keeps the first render's values, so
-  // the mode it reads has to come from a ref: otherwise flipping the toggle moved the
-  // pill and left the wheel on speed.
-  const modeRef = useRef(wheelMode);
-  modeRef.current = wheelMode;
+
   const semisRef = useRef(0);
   semisRef.current = semis;
   const speedRef = useRef(1);
@@ -278,10 +273,17 @@ export default function DeckScreen() {
     // Tape pitch: the reel bends the key by bending the speed, so the key and the
     // tempo move together and nothing has to be rendered. Only the wheel's bend is
     // added on top; the transport's own speed is untouched by it.
-    const pitchMode = wheelMode === 'pitch';
+    // The PITCH slider bends the tape itself, so it multiplies the transport's speed
+    // and the key bends with it. A hand on the reel overrides the slider while it is
+    // down; the slider is the rest of the time.
+    const trim = trimRef.current;
+    const bent = Math.abs(trim - 1) > 0.001;
     const transport = p.mode === 'play' || p.mode === 'rec';
-    const going = pitchMode ? transport : t.playing;
-    const rate = pitchMode ? (transport ? speedRef.current * trimRef.current : 0) : t.rate;
+    const going = t.playing;
+    const rate =
+      !t.hand && transport
+        ? Math.max(0.0625, Math.min(8, speedRef.current * trim))
+        : t.rate;
     // A bounced take carries the tracks it printed, so those tracks are left out
     // while it plays. The printed backing and the live one together is the music
     // twice over — the one failure mode a bounce has.
@@ -300,7 +302,7 @@ export default function DeckScreen() {
       // the way a tape does.
       // In pitch mode the key is meant to bend with the speed, so the mixer is asked
       // for tape pitch rather than a held key.
-      mixerRef.current.sync(items, p.pos, going, rate, lock && !pitchMode);
+      mixerRef.current.sync(items, p.pos, going, rate, lock && !bent);
     } catch (e) {
       // Never silently: a mixer that throws is a tape that stops sounding.
       console.error('[deck] mixer sync failed', e);
@@ -443,8 +445,10 @@ export default function DeckScreen() {
         if (p.mode === 'rec') {
           p.vel = normalRef.current;
         } else {
-          const trim = modeRef.current === 'pitch' ? trimRef.current : 1;
-          const target = p.mode === 'play' ? normalRef.current * speedRef.current * trim : MODES[p.mode] || 0;
+          const target =
+            p.mode === 'play'
+              ? normalRef.current * speedRef.current * trimRef.current
+              : MODES[p.mode] || 0;
           // Speeding up is quick (the hand has already asked for it); slowing down
           // and settling after a spin glide, so letting go sounds like the reel
           // finding its speed rather than the tape being snatched back.
@@ -509,9 +513,7 @@ export default function DeckScreen() {
         return;
       }
       phys.locked = false;
-      phys.dragging = modeRef.current === 'speed';
-      // Pitch turns count the travel made since the hand went down.
-      phys.trimAcc = 0;
+      phys.dragging = true;
       setGrabbed(true);
       Haptics.selectionAsync().catch(() => {});
     },
@@ -526,17 +528,6 @@ export default function DeckScreen() {
       // The reel can be told to run the other way, for a hand that expects a turn in
       // the opposite direction to mean forward.
       phys.lastA = a;
-      if (modeRef.current === 'pitch') {
-        // Tape pitch: the reel bends the speed, and the key bends with it. Clockwise
-        // up, anticlockwise down, a hundredth of the tape's speed per turn.
-        phys.trimAcc = (phys.trimAcc || 0) + d;
-        const next = Math.max(
-          PITCH_TRIM_MIN,
-          Math.min(PITCH_TRIM_MAX, 1 + (phys.trimAcc / 360) * PITCH_RATE_PER_TURN)
-        );
-        trimRef.current = next;
-        return;
-      }
       // Direction belongs to the speed control; the pitch wheel is always clockwise
       // up, as the hand expects.
       if (invertRef.current) d = -d;
@@ -976,20 +967,8 @@ export default function DeckScreen() {
   const toggleLock = () => {
     Haptics.selectionAsync().catch(() => {});
     const next = !lock;
-    if (next) {
-      // Let go of any hand that was on the reel, and start the pitch bend from the
-      // tape's own speed. The transport keeps its own speed; the reel only adds a
-      // bend on top, and leaving the mode removes it again.
-      phys.dragging = false;
-      phys.trimAcc = 0;
-      trimRef.current = 1;
-    }
     setLock(next);
-    flash(
-      next
-        ? 'WHEEL · SPEED — A TURN MOVES THE TEMPO'
-        : 'WHEEL · PITCH — A TURN BENDS THE KEY, TEMPO FOLLOWS'
-    );
+    flash(next ? 'PITCH LOCK — SPEED KEEPS THE KEY' : 'TAPE PITCH — SPEED BENDS THE KEY');
   };
   const onExport = async () => {
     if (mode === 'rec') { flash('STOP RECORDING FIRST'); return; }
@@ -1172,17 +1151,44 @@ export default function DeckScreen() {
             <Pressable
               accessibilityRole="switch"
               accessibilityState={{ checked: lock }}
-              accessibilityLabel={lock ? 'Wheel adjusts speed: a spin changes the tempo and the key holds' : 'Wheel adjusts pitch: a spin changes the tempo and the key bends with it'}
+              accessibilityLabel={lock ? 'Pitch lock on: speed keeps the key' : 'Tape pitch: speed bends the key'}
               onPress={toggleLock}
             >
               <GlassPanel radius={16} style={[s.pill, { borderColor: lock ? glassStroke : t.accent }]}>
-                <Ionicons name={lock ? 'speedometer-outline' : 'musical-notes-outline'} size={13} color={lock ? t.textMuted : t.accent} />
+                <Ionicons name={lock ? 'lock-closed' : 'lock-open'} size={13} color={lock ? t.textMuted : t.accent} />
                 <EngravedText size={10} color={lock ? t.textMuted : t.accent} style={{ marginLeft: 5 }}>
-                  {lock ? 'WHEEL · SPEED' : 'WHEEL · PITCH'}
+                  {lock ? 'PITCH LOCK' : 'TAPE PITCH'}
                 </EngravedText>
               </GlassPanel>
             </Pressable>
           </View>
+        </View>
+
+        {/* Speed and pitch as sliders: the wheel is the dial, these are the numbers. */}
+        <View style={s.sliderRow}>
+          <Slider
+            label="SPEED"
+            value={speed}
+            min={0.5}
+            max={2}
+            format={(v) => Math.round(v * 100) + '%'}
+            onChange={(v) => { speedRef.current = v; }}
+            onCommit={(v) => {
+              const next = clamp(Math.round(v * 100) / 100, 0.5, 2);
+              speedRef.current = next;
+              setSpeed(next);
+            }}
+          />
+          <View style={{ width: 16 }} />
+          <Slider
+            label="PITCH"
+            value={pitchUI}
+            min={PITCH_TRIM_MIN}
+            max={PITCH_TRIM_MAX}
+            format={(v) => (Math.round((v - 1) * 100) > 0 ? '+' : '') + Math.round((v - 1) * 100) + '%'}
+            onChange={(v) => { trimRef.current = v; }}
+            onCommit={() => setPitchUI(trimRef.current)}
+          />
         </View>
 
         {/* Tape strip: the whole recording, drag the head to scrub, tap to jump */}
@@ -1361,6 +1367,7 @@ const s = StyleSheet.create({
   pill: { height: 32, paddingHorizontal: 4, borderRadius: 16, borderWidth: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
   pillStep: { width: 28, height: 28, alignItems: 'center', justifyContent: 'center' },
   pillValue: { minWidth: 62, height: 28, alignItems: 'center', justifyContent: 'center' },
+  sliderRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, marginTop: 10 },
   strip: { height: 64, marginHorizontal: 20, justifyContent: 'center' },
   stripBar: { height: 14, borderRadius: 3, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden' },
   playhead: { position: 'absolute', width: 2, height: 30, top: 14 },
