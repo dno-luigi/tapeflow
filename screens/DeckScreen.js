@@ -12,7 +12,7 @@ import { ART } from '../constants/artwork';
 import { useStudio } from '../store/StudioContext';
 import { createMixer, buildItems, supersedeSkip } from '../lib/audio/TapeMixer';
 import { applyLevelOverride } from '../lib/audio/mixPlan';
-import { wheelTransport, HAND_MIN, HAND_MAX } from '../lib/audio/wheel';
+import { wheelTransport, DEG_PER_SEC_AT_1X, HAND_MIN, HAND_MAX } from '../lib/audio/wheel';
 import EngravedText from '../components/EngravedText';
 import VUMeter from '../components/VUMeter';
 import TrackLevel from '../components/TrackLevel';
@@ -28,8 +28,10 @@ import { rememberTakeAudio, hydrateTakeAudio } from '../lib/audio/takeStore';
 import { tapeTimeAt } from '../lib/audio/scrub';
 
 // Wheel physics. One turn of the reel moves SEC_PER_REV seconds of tape at normal speed.
-const NORMAL = 120; // degrees per second at 1x play speed
-const SEC_PER_REV = 3;
+// The one-speed reference comes from the transport rule, so a hand turning at that
+// rate plays the tape at its own speed — the two must be the same number.
+const NORMAL = DEG_PER_SEC_AT_1X; // degrees per second at 1x play speed
+const SEC_PER_REV = 360 / NORMAL;
 const MAXV = 1440; // 12x
 // The reel's varispeed range, the same one the field recorder it is modelled on
 // offers: half speed to double. Inside it the take bends in pitch with the hand,
@@ -449,7 +451,11 @@ export default function DeckScreen() {
       phys.lastMoveT = now;
       phys.angle = (phys.angle + d) % 360;
       angleVal.setValue(phys.angle);
-      phys.pos = Math.max(0, Math.min(CAPACITY, phys.pos + d / NORMAL));
+      // The tape travels only as fast as the audio can follow: past the element's
+      // limit the sound is clamped, so the head is clamped with it or the two drift
+      // apart and the mixer re-cuts the take every few frames.
+      const travel = Math.max(-HAND_MAX, Math.min(HAND_MAX, d / dt / NORMAL)) * dt;
+      phys.pos = Math.max(0, Math.min(CAPACITY, phys.pos + travel));
       const inst = d / dt;
       phys.vel = Math.max(-MAXV, Math.min(MAXV, phys.vel * 0.6 + inst * 0.4));
       phys.hapticAcc += Math.abs(d);
@@ -990,7 +996,7 @@ export default function DeckScreen() {
                 accessibilityLabel={'Speed ' + speedText + ', drag to fine tune'}
               >
                 <EngravedText size={12} color={recording ? t.accent : t.warning}>
-                  {recording ? 'REC · 100%' : moving ? (speedX > HAND_MAX ? 'SPOOLING' : speedPct + '%') : speedText}
+                  {recording ? 'REC · 100%' : mode === 'ff' || mode === 'rew' ? 'SPOOLING' : moving ? speedPct + '%' : speedText}
                 </EngravedText>
               </View>
               <Pressable

@@ -24,6 +24,19 @@ test('a hand turning at the song’s pace plays at the song’s pace', () => {
   assert.equal(out.rate, 1);
 });
 
+test('calibration: one turn a second is normal speed', () => {
+  // A quick, comfortable turn — not a slow crank — has to land on 1x. The old
+  // three-seconds-per-turn calibration put an ordinary spin at 2–3x and into the
+  // ceiling.
+  const at = (degPerSec) => wheelTransport({ mode: 'play', dragging: true, vel: degPerSec }).rate;
+  assert.equal(at(360), 1);
+  assert.equal(at(720), 2);
+  assert.equal(at(180), 0.5);
+  assert.equal(at(90), 0.25);
+  // Faster than the element can go still sounds, at the element's limit.
+  assert.equal(at(3600), 8);
+});
+
 test('a slow hand still sounds — slowly', () => {
   // 0.1x used to sit under the playable floor and came out as silence.
   const out = wheelTransport({ mode: 'stop', dragging: true, vel: turn(0.1) });
