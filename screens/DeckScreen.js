@@ -124,16 +124,19 @@ export default function DeckScreen() {
   // showed one value and the reel used another.
   const storedSens = Number(settings.wheelSens);
   const legacySens =
-    !storedSens || storedSens === 0.3 || storedSens === 0.6 || storedSens === 1 || storedSens === 1.2;
-  const wheelSens = clamp(
-    settings.wheelTuned === true || !legacySens ? storedSens || 0.8 : 0.8,
-    0.1,
-    4
-  );
-  // A hand that expects the other direction to mean forward can say so.
-  const wheelInvert = settings.wheelInvert === true;
+    !storedSens ||
+    Math.abs(storedSens) === 0.3 ||
+    Math.abs(storedSens) === 0.6 ||
+    Math.abs(storedSens) === 1 ||
+    Math.abs(storedSens) === 1.2;
+  const sensRaw = settings.wheelTuned === true || !legacySens ? storedSens || 0.8 : 0.8;
+  const topRaw = Number(settings.wheelCeiling) || 3;
+  // The magnitude is how much, the sign is which way: a negative number runs the
+  // reel the other way.
+  const wheelSens = clamp(Math.abs(sensRaw) || 0.8, 0.1, 4);
   // How fast a hard spin may take the tape, chosen on the back panel.
-  const wheelCeiling = clamp(Number(settings.wheelCeiling) || 3, 1.2, 8);
+  const wheelCeiling = clamp(Math.abs(topRaw) || 3, 1.2, 8);
+  const wheelInvert = (sensRaw < 0) !== (topRaw < 0);
   const wheelNormal = DEG_PER_SEC_AT_1X / wheelSens;
   const normalRef = useRef(wheelNormal);
   normalRef.current = wheelNormal;
