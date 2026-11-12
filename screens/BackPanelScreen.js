@@ -177,9 +177,9 @@ export default function BackPanelScreen() {
     if (!updateSettings) return;
     if (key === 'wheelSens') {
       const step = sens < 1 ? 0.1 : 0.2;
-      updateSettings({ wheelSens: Math.round(clamp(sens + dir * step, 0.1, 4) * 10) / 10 });
+      updateSettings({ wheelSens: Math.round(clamp(sens + dir * step, 0.1, 4) * 10) / 10, wheelTuned: true });
     } else {
-      updateSettings({ wheelCeiling: Math.round(clamp(ceiling + dir * 0.5, 1.2, 8) * 10) / 10 });
+      updateSettings({ wheelCeiling: Math.round(clamp(ceiling + dir * 0.5, 1.2, 8) * 10) / 10, wheelTuned: true });
     }
   };
   const wheelRow = (key, title, helper, value) => (
@@ -294,6 +294,10 @@ export default function BackPanelScreen() {
           {wheelRow('wheelSens', 'SPEED PER TURN', 'Higher is twitchier: a turn buys more tape speed.', sens.toFixed(1) + '×')}
           <View style={{ height: 10 }} />
           {wheelRow('wheelCeiling', 'TOP SPEED', 'A hard spin stops here instead of running away.', ceiling.toFixed(1) + '×')}
+          <View style={{ height: 12 }} />
+          <ToggleSwitch label="REVERSE THE REEL" value={!!settings.wheelInvert}
+            helper="Turn it the other way to go forward."
+            onValueChange={(v) => { buzz(); updateSettings && updateSettings({ wheelInvert: v }); }} />
         </Section>
 
         <Section title="REMINDER" t={t}>

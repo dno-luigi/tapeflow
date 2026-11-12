@@ -21,6 +21,12 @@ const DEFAULT_SETTINGS = {
   // The fastest a hand on the reel can take the tape. Set on the back panel; a hard
   // spin approaches this instead of running away.
   wheelCeiling: 3,
+  // True only once the back panel has set the reel's numbers, so an old default
+  // saved by an earlier build can be moved forward without ever overriding a number
+  // the hand chose.
+  wheelTuned: false,
+  // The reel runs the way the hand expects: flip it if forward feels backwards.
+  wheelInvert: false,
   reminderOn: false,
   reminderTime: { hour: 19, minute: 0 },
   reminderDays: [1, 2, 3, 4, 5],

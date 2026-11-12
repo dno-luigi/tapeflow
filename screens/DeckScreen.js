@@ -114,17 +114,21 @@ export default function DeckScreen() {
   // A turn's worth of speed. The reference is one turn a second; the setting
   // scales it, so a hand that wants to spin harder can, and one that wants a
   // touch more speed per turn can have that too.
-  // 0.3 and 0.6 both shipped as defaults and both buy too little speed per turn. A
-  // deck saved under either is moved to the current default instead of staying
-  // stuck on a number that was never the right one.
+  // Old builds shipped 0.3, 0.6, 1 and 1.2 as defaults and wrote them into saved
+  // settings. Those are moved forward once, and only for a deck that has never been
+  // tuned on the back panel: a number the hand chose is never overridden, even when
+  // it happens to equal an old default. That override was a real trap — the panel
+  // showed one value and the reel used another.
   const storedSens = Number(settings.wheelSens);
+  const legacySens =
+    !storedSens || storedSens === 0.3 || storedSens === 0.6 || storedSens === 1 || storedSens === 1.2;
   const wheelSens = clamp(
-    !storedSens || storedSens === 0.3 || storedSens === 0.6 || storedSens === 1 || storedSens === 1.2
-      ? 0.8
-      : storedSens,
+    settings.wheelTuned === true || !legacySens ? storedSens || 0.8 : 0.8,
     0.1,
     4
   );
+  // A hand that expects the other direction to mean forward can say so.
+  const wheelInvert = settings.wheelInvert === true;
   // How fast a hard spin may take the tape, chosen on the back panel.
   const wheelCeiling = clamp(Number(settings.wheelCeiling) || 3, 1.2, 8);
   const wheelNormal = DEG_PER_SEC_AT_1X / wheelSens;
@@ -481,6 +485,9 @@ export default function DeckScreen() {
       let d = a - phys.lastA;
       if (d > 180) d -= 360;
       if (d < -180) d += 360;
+      // The reel can be told to run the other way, for a hand that expects a turn in
+      // the opposite direction to mean forward.
+      if (wheelInvert) d = -d;
       phys.lastA = a;
       const now = Date.now();
       const dt = Math.max(8, now - phys.lastMoveT) / 1000;
