@@ -114,7 +114,7 @@ export default function DeckScreen() {
   // A turn's worth of speed. The reference is one turn a second; the setting
   // scales it, so a hand that wants to spin harder can, and one that wants a
   // touch more speed per turn can have that too.
-  const wheelSens = clamp(Number(settings.wheelSens) || 1, 0.5, 4);
+  const wheelSens = clamp(Number(settings.wheelSens) || 0.6, 0.5, 4);
   const wheelNormal = DEG_PER_SEC_AT_1X / wheelSens;
   const normalRef = useRef(wheelNormal);
   normalRef.current = wheelNormal;
@@ -141,7 +141,9 @@ export default function DeckScreen() {
   const [speed, setSpeed] = useState(1);
   const [semis, setSemis] = useState(0);
   const [semisHeard, setSemisHeard] = useState(0);
-  const [lock, setLock] = useState(false);
+  // PITCH LOCK is the default: the reel is a tempo control first, and the key only
+  // rides the speed when the deck is told to behave like a tape.
+  const [lock, setLock] = useState(true);
   const speedRef = useRef(1);
   const semisRef = useRef(0);
   const exportBusy = useRef(false);
@@ -243,10 +245,10 @@ export default function DeckScreen() {
     // A fader being dragged is heard as it moves, before it is written down.
     const items = applyLevelOverride(base, levelDrag ? levelDrag.index : null, levelDrag ? levelDrag.value : NaN);
     try {
-      // A hand on the reel always holds the pitch. Spinning is a tempo control, so
-      // it may speed the song up or slow it down; it may not turn voices into
-      // chipmunks. The TAPE PITCH key still decides for the keys and the tape.
-      mixerRef.current.sync(items, p.pos, going, rate, lock || p.dragging);
+      // The TAPE PITCH key governs the reel as well as the tape: with it on, a spin
+      // keeps the key and only the tempo moves; with it off, the key rides the speed
+      // the way a tape does.
+      mixerRef.current.sync(items, p.pos, going, rate, lock);
     } catch (e) {
       // Never silently: a mixer that throws is a tape that stops sounding.
       console.error('[deck] mixer sync failed', e);
@@ -383,13 +385,17 @@ export default function DeckScreen() {
       prev = now;
       const p = phys;
       if (p.dragging) {
-        if (now - p.lastMoveT > 90) p.vel *= 0.6;
+        // A hand that stops turning lets the sound down gently, not with a drop.
+        if (now - p.lastMoveT > 90) p.vel *= Math.exp(-3 * dt);
       } else {
         if (p.mode === 'rec') {
           p.vel = normalRef.current;
         } else {
           const target = p.mode === 'play' ? normalRef.current * speedRef.current : MODES[p.mode] || 0;
-          const k = Math.abs(target) > Math.abs(p.vel) ? 5 : target === 0 ? 1.3 : 2.5;
+          // Speeding up is quick (the hand has already asked for it); slowing down
+          // and settling after a spin glide, so letting go sounds like the reel
+          // finding its speed rather than the tape being snatched back.
+          const k = Math.abs(target) > Math.abs(p.vel) ? 5 : 1.4;
           p.vel += (target - p.vel) * (1 - Math.exp(-k * dt));
           if (Math.abs(target - p.vel) < 1) p.vel = target;
         }
