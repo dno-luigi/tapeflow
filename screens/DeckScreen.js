@@ -31,9 +31,10 @@ import { tapeTimeAt } from '../lib/audio/scrub';
 // The one-speed reference comes from the transport rule, so a hand turning at that
 // rate plays the tape at its own speed — the two must be the same number.
 const NORMAL = DEG_PER_SEC_AT_1X; // degrees per second at 1x play speed
-// In WHEEL · PITCH one semitone is two full turns of the reel, so the key can be
-// nudged finely instead of jumping most of the range on a single turn.
-const PITCH_DEG_PER_SEMITONE = 720;
+// In WHEEL · PITCH one full turn of the reel moves the key by a tenth of a semitone:
+// clockwise up, anticlockwise down. Ten turns to a semitone, so it is a fine nudge,
+// and the tape keeps the speed it had when the toggle was flipped.
+const PITCH_PER_TURN = 0.1;
 const SEC_PER_REV = 360 / NORMAL;
 const MAXV = 1440; // 12x
 // The reel's varispeed range, the same one the field recorder it is modelled on
@@ -487,10 +488,10 @@ export default function DeckScreen() {
       }
       phys.locked = false;
       phys.dragging = wheelMode === 'speed';
-      // Where the key stands now, so a pitch turn moves from here rather than
-      // snapping to a new place. The whole -12..+12 sweep takes this many degrees,
-      // and the sensitivity sets how many turns that is.
-      phys.pitchAcc = (semisRef.current + 12) * PITCH_DEG_PER_SEMITONE;
+      // Pitch turns move from where the key already stands, and only count the
+      // travel made since the hand went down.
+      phys.pitchBase = semisRef.current;
+      phys.pitchAcc = 0;
       setGrabbed(true);
       Haptics.selectionAsync().catch(() => {});
     },
@@ -504,22 +505,25 @@ export default function DeckScreen() {
       if (d < -180) d += 360;
       // The reel can be told to run the other way, for a hand that expects a turn in
       // the opposite direction to mean forward.
-      if (wheelInvert) d = -d;
       phys.lastA = a;
       if (wheelMode === 'pitch') {
-        // Pitch is a knob from -12 to +12 semitones and nothing else moves: the tape
-        // keeps its speed and its place while the key turns under the hand.
+        // The wheel is a pitch control here: a tenth of a semitone per full turn,
+        // clockwise up and anticlockwise down. Nothing else moves — the tape keeps
+        // the speed it was locked at when the toggle was flipped, and its place.
+        phys.pitchAcc = (phys.pitchAcc || 0) + d;
         const next = Math.max(
           -12,
-          Math.min(12, Math.round(phys.pitchAcc / PITCH_DEG_PER_SEMITONE) - 12)
+          Math.min(12, Math.round((phys.pitchBase + (phys.pitchAcc / 360) * PITCH_PER_TURN) * 10) / 10)
         );
         if (next !== semisRef.current) {
           semisRef.current = next;
-          Haptics.selectionAsync().catch(() => {});
           setSemis(next);
         }
         return;
       }
+      // Direction belongs to the speed control; the pitch wheel is always clockwise
+      // up, as the hand expects.
+      if (wheelInvert) d = -d;
       if (!phys.dragging) return;
       const now = Date.now();
       const dt = Math.max(8, now - phys.lastMoveT) / 1000;
@@ -956,8 +960,19 @@ export default function DeckScreen() {
   const toggleLock = () => {
     Haptics.selectionAsync().catch(() => {});
     const next = !lock;
+    if (next) {
+      // Freeing the key locks the speed: whatever the tape is running at now is what
+      // it keeps while the reel moves the pitch.
+      const held = clamp(Math.abs(phys.vel / normalRef.current) || speedRef.current, 0.5, 2);
+      speedRef.current = held;
+      setSpeed(held);
+    }
     setLock(next);
-    flash(next ? 'WHEEL · SPEED — A TURN MOVES THE TEMPO' : 'WHEEL · PITCH — A TURN MOVES THE KEY');
+    flash(
+      next
+        ? 'WHEEL · SPEED — A TURN MOVES THE TEMPO'
+        : 'WHEEL · PITCH — SPEED LOCKED, A TURN MOVES THE KEY'
+    );
   };
   const onExport = async () => {
     if (mode === 'rec') { flash('STOP RECORDING FIRST'); return; }
