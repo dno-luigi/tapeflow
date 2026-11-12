@@ -968,11 +968,11 @@ export default function DeckScreen() {
     Haptics.selectionAsync().catch(() => {});
     const next = !lock;
     if (next) {
-      // Freeing the key locks the speed: whatever the tape is running at now is what
-      // it keeps while the reel moves the pitch.
-      const held = clamp(Math.abs(phys.vel / normalRef.current) || speedRef.current, 0.5, 2);
-      speedRef.current = held;
-      setSpeed(held);
+      // Freeing the key freezes the speed where the control has it, and lets go of any
+      // hand that was on the reel: from here the wheel moves the pitch and nothing
+      // else. It must not capture the reel's momentary speed — that started a stopped
+      // tape at half speed and slowed a playing one at the moment of the switch.
+      phys.dragging = false;
     }
     setLock(next);
     flash(
