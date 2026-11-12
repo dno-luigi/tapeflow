@@ -31,6 +31,9 @@ import { tapeTimeAt } from '../lib/audio/scrub';
 // The one-speed reference comes from the transport rule, so a hand turning at that
 // rate plays the tape at its own speed — the two must be the same number.
 const NORMAL = DEG_PER_SEC_AT_1X; // degrees per second at 1x play speed
+// In WHEEL · PITCH one semitone is two full turns of the reel, so the key can be
+// nudged finely instead of jumping most of the range on a single turn.
+const PITCH_DEG_PER_SEMITONE = 720;
 const SEC_PER_REV = 360 / NORMAL;
 const MAXV = 1440; // 12x
 // The reel's varispeed range, the same one the field recorder it is modelled on
@@ -481,7 +484,7 @@ export default function DeckScreen() {
       // Where the key stands now, so a pitch turn moves from here rather than
       // snapping to a new place. The whole -12..+12 sweep takes this many degrees,
       // and the sensitivity sets how many turns that is.
-      phys.pitchAcc = ((semisRef.current + 12) / 24) * (720 / Math.max(0.2, wheelSens));
+      phys.pitchAcc = (semisRef.current + 12) * PITCH_DEG_PER_SEMITONE;
       setGrabbed(true);
       Haptics.selectionAsync().catch(() => {});
     },
@@ -500,8 +503,10 @@ export default function DeckScreen() {
       if (wheelMode === 'pitch') {
         // Pitch is a knob from -12 to +12 semitones and nothing else moves: the tape
         // keeps its speed and its place while the key turns under the hand.
-        const sweep = 720 / Math.max(0.2, wheelSens);
-        const next = Math.max(-12, Math.min(12, Math.round((phys.pitchAcc / sweep) * 24) - 12));
+        const next = Math.max(
+          -12,
+          Math.min(12, Math.round(phys.pitchAcc / PITCH_DEG_PER_SEMITONE) - 12)
+        );
         if (next !== semisRef.current) {
           semisRef.current = next;
           Haptics.selectionAsync().catch(() => {});

@@ -170,16 +170,17 @@ export default function BackPanelScreen() {
 
   // The reel's two numbers. They are a feel, and only the hand that spins it can
   // decide, so they live here rather than being guessed at in code.
-  const sens = clamp(Number(settings.wheelSens) || 0.8, 0.1, 4);
-  const ceiling = clamp(Number(settings.wheelCeiling) || 3, 1.2, 8);
+  // Negative is allowed and means the reel runs the other way.
+  const sens = clamp(Number(settings.wheelSens) || 0.8, -4, 4);
+  const ceiling = clamp(Number(settings.wheelCeiling) || 3, -8, 8);
   const stepWheel = (key, dir) => {
     buzz();
     if (!updateSettings) return;
     if (key === 'wheelSens') {
-      const step = sens < 1 ? 0.1 : 0.2;
-      updateSettings({ wheelSens: Math.round(clamp(sens + dir * step, 0.1, 4) * 10) / 10, wheelTuned: true });
+      const step = Math.abs(sens) < 1 ? 0.1 : 0.2;
+      updateSettings({ wheelSens: Math.round(clamp(sens + dir * step, -4, 4) * 10) / 10, wheelTuned: true });
     } else {
-      updateSettings({ wheelCeiling: Math.round(clamp(ceiling + dir * 0.5, 1.2, 8) * 10) / 10, wheelTuned: true });
+      updateSettings({ wheelCeiling: Math.round(clamp(ceiling + dir * 0.5, -8, 8) * 10) / 10, wheelTuned: true });
     }
   };
   const wheelRow = (key, title, helper, value) => (
@@ -291,13 +292,9 @@ export default function BackPanelScreen() {
         </Section>
 
         <Section title="REEL" t={t}>
-          {wheelRow('wheelSens', 'SPEED PER TURN', 'Higher is twitchier: a turn buys more tape speed.', sens.toFixed(1) + '×')}
+          {wheelRow('wheelSens', 'SPEED PER TURN', 'Higher is twitchier. Negative runs the reel the other way.', sens.toFixed(1) + '×')}
           <View style={{ height: 10 }} />
-          {wheelRow('wheelCeiling', 'TOP SPEED', 'A hard spin stops here instead of running away.', ceiling.toFixed(1) + '×')}
-          <View style={{ height: 12 }} />
-          <ToggleSwitch label="REVERSE THE REEL" value={!!settings.wheelInvert}
-            helper="Turn it the other way to go forward."
-            onValueChange={(v) => { buzz(); updateSettings && updateSettings({ wheelInvert: v }); }} />
+          {wheelRow('wheelCeiling', 'TOP SPEED', 'A hard spin stops here. Negative runs the reel the other way.', ceiling.toFixed(1) + '×')}
         </Section>
 
         <Section title="REMINDER" t={t}>
