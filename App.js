@@ -9,6 +9,7 @@ import { createStackNavigator } from '@react-navigation/stack';
 import { StatusBar } from 'expo-status-bar';
 
 import { ThemeProvider, useTheme, guardScreen } from './ui/theme';
+import { lockPage } from './lib/lockPage';
 import { AppStoreProvider } from './store/StudioContext';
 
 import WelcomeScreen from './screens/WelcomeScreen';
@@ -17,6 +18,9 @@ import DeckScreen from './screens/DeckScreen';
 import TakesScreen from './screens/TakesScreen';
 import BackPanelScreen from './screens/BackPanelScreen';
 import SessionsScreen from './screens/SessionsScreen';
+
+// Before anything renders: a pull-down on the web must not reload the deck.
+lockPage();
 
 const RootStack = createStackNavigator();
 
