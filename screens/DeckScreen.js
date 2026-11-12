@@ -175,10 +175,10 @@ export default function DeckScreen() {
   // PITCH LOCK is the default: the reel is a tempo control first, and the key only
   // rides the speed when the deck is told to behave like a tape.
   const [lock, setLock] = useState(true);
-  // How far the pitch wheel has bent the tape. 1 is the tape's own speed.
-  const [pitchTrim, setPitchTrim] = useState(1);
+  // How far the pitch wheel has bent the tape. 1 is the tape's own speed. It lives in
+  // a ref on purpose: this changes on every pointer event, and putting it in state
+  // re-rendered the whole deck dozens of times a second, which is what froze it.
   const trimRef = useRef(1);
-  trimRef.current = pitchTrim;
   // What the wheel's turn does. With the key held it is the tempo; with the key free
   // it is the pitch, and a turn moves through the key instead of through the tape.
   const wheelMode = lock ? 'speed' : 'pitch';
@@ -534,10 +534,7 @@ export default function DeckScreen() {
           PITCH_TRIM_MIN,
           Math.min(PITCH_TRIM_MAX, 1 + (phys.trimAcc / 360) * PITCH_RATE_PER_TURN)
         );
-        if (Math.abs(next - trimRef.current) > 0.0005) {
-          trimRef.current = next;
-          setPitchTrim(next);
-        }
+        trimRef.current = next;
         return;
       }
       // Direction belongs to the speed control; the pitch wheel is always clockwise
@@ -986,7 +983,6 @@ export default function DeckScreen() {
       phys.dragging = false;
       phys.trimAcc = 0;
       trimRef.current = 1;
-      setPitchTrim(1);
     }
     setLock(next);
     flash(
