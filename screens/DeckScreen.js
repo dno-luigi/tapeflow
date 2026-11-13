@@ -22,7 +22,6 @@ import { renderBounce } from '../lib/audio/bounce';
 import { takeAudioReady } from '../lib/audio/takeStore';
 import { ObsidianBackdrop, GlassPanel, GlassSpecular, glassStroke, glassFill } from '../ui/glass';
 import GlassReel from '../components/GlassReel';
-import Slider from '../components/Slider';
 import { exportReel, canExport } from '../lib/audio/exportReel';
 import { rememberTakeAudio, hydrateTakeAudio } from '../lib/audio/takeStore';
 import { tapeTimeAt } from '../lib/audio/scrub';
@@ -855,8 +854,8 @@ export default function DeckScreen() {
   // disc takes what is left, and its own box is measured rather than guessed, so
   // it can never push the captions off the bottom of the screen.
   const [wheelBox, setWheelBox] = useState(0);
-  const chrome = insets.top + insets.bottom + 58 + 52 + 24 + 46 + 40 + 54 + 78 + 70 + 16;
-  const size = Math.max(140, Math.min(W - 18, (wheelBox || H - chrome) - 96));
+  const chrome = insets.top + insets.bottom + 58 + 52 + 24 + 46 + 56 + 64 + 70 + 14;
+  const size = Math.max(140, Math.min(W - 10, (wheelBox || H - chrome) - 74));
   wheelSize.current = size;
 
   const span = (() => {
@@ -1092,9 +1091,6 @@ export default function DeckScreen() {
             <EngravedText size={9} color={t.textMuted} numberOfLines={1} style={{ marginTop: 1 }}>
               {(recording ? 'REC · ' : '') + ((current && current.name) || 'UNTITLED TAPE')}
             </EngravedText>
-            <EngravedText size={8} color={'rgba(255,255,255,0.28)'} style={{ marginTop: 1 }}>
-              {sr + ' kHz · 24-BIT'}
-            </EngravedText>
           </Pressable>
           <View style={s.meter}>
             <EngravedText size={7} color={t.textMuted}>{recording ? 'IN' : 'OUT'}</EngravedText>
@@ -1210,40 +1206,6 @@ export default function DeckScreen() {
           </View>
         </View>
 
-        {/* Speed and pitch as sliders: the wheel is the dial, these are the numbers. */}
-        <View style={s.sliderRow}>
-          <Slider
-            label="SPEED"
-            value={speed}
-            min={0.5}
-            max={2}
-            format={(v) => Math.round(v * 100) + '%'}
-            onChange={(v) => { speedRef.current = v; }}
-            onCommit={(v) => {
-              const next = clamp(Math.round(v * 100) / 100, 0.5, 2);
-              speedRef.current = next;
-              setSpeed(next);
-            }}
-          />
-          <View style={{ width: 16 }} />
-          <Slider
-            label="PITCH"
-            value={pitchUI}
-            min={PITCH_TRIM_MIN}
-            max={PITCH_TRIM_MAX}
-            format={(v) => (Math.round((v - 1) * 100) > 0 ? '+' : '') + Math.round((v - 1) * 100) + '%'}
-            onChange={(v) => { trimRef.current = v; }}
-            onCommit={() => {
-              // The slider and the key readout are two views of one bend.
-              setPitchUI(trimRef.current);
-              let s = clamp(Math.round(trimToSemis(trimRef.current) / KEY_STEP) * KEY_STEP, KEY_MIN, KEY_MAX);
-              s = Math.abs(s) < 0.03 ? 0 : Math.round(s * 100) / 100;
-              semisRef.current = s;
-              setSemis(s);
-            }}
-          />
-        </View>
-
         {/* Tape strip: the whole recording, drag the head to scrub, tap to jump */}
         <View
           ref={stripRef}
@@ -1305,7 +1267,11 @@ export default function DeckScreen() {
           </View>
         </View>
 
-        <EngravedText size={12} color={legendMsg ? t.accent : t.textMuted} style={{ textAlign: 'center', marginTop: 4 }}>{legend}</EngravedText>
+        {/* Only while there is something to say: a permanent caption on the face
+            is one more thing crowding the machine. */}
+        {legendMsg ? (
+          <EngravedText size={10} color={t.accent} style={{ textAlign: 'center', marginTop: 2 }}>{legendMsg}</EngravedText>
+        ) : null}
 
         {/* Arm row and cue */}
         <View style={s.armRow}>
@@ -1343,7 +1309,7 @@ export default function DeckScreen() {
                   accessibilityLabel={'Track ' + (i + 1) + (armed ? ' armed' : ' not armed') + ', hold for takes'}
                   style={({ pressed }) => [s.armKey, { opacity: pressed ? 0.75 : 1 }]}
                 >
-                  <Text style={[t.font.label, { color: armed ? t.onAccent : t.textMuted, fontSize: 13, lineHeight: 17 }]}>{'TRK ' + (i + 1)}</Text>
+                  <Text style={[t.font.label, { color: armed ? t.onAccent : t.textMuted, fontSize: 11, lineHeight: 14 }]}>{'TRK ' + (i + 1)}</Text>
                   <Text style={[t.font.caption, { color: armed ? t.onAccent : t.textMuted, fontSize: 10, lineHeight: 13, opacity: 0.85 }]}>
                     {armed ? 'REC HERE' : silent ? 'SILENT' : noAudio ? 'NO AUDIO' : n > 0 ? (anyArmed ? 'PLAYS' : n === 1 ? '1 TAKE' : n + ' TAKES') : 'EMPTY'}
                   </Text>
@@ -1439,22 +1405,21 @@ const s = StyleSheet.create({
   wheelArea: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   notch: { position: 'absolute', top: -6, width: 16, height: 14 },
   functionRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 14, marginTop: 4, paddingHorizontal: 18 },
-  loopBar: { position: 'absolute', top: 8, height: 3, borderRadius: 2 },
+  loopBar: { position: 'absolute', top: 10, height: 3, borderRadius: 2 },
   pill: { height: 32, paddingHorizontal: 4, borderRadius: 16, borderWidth: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
   pillStep: { width: 28, height: 28, alignItems: 'center', justifyContent: 'center' },
   pillValue: { minWidth: 62, height: 28, alignItems: 'center', justifyContent: 'center' },
-  sliderRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, marginTop: 6 },
-  strip: { height: 64, marginHorizontal: 20, justifyContent: 'center' },
+  strip: { height: 56, marginHorizontal: 20, justifyContent: 'center' },
   stripBar: { height: 14, borderRadius: 3, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden' },
-  playhead: { position: 'absolute', width: 2, height: 30, top: 14 },
-  grip: { position: 'absolute', width: 12, height: 12, borderRadius: 6, borderWidth: 1.5, top: 23 },
+  playhead: { position: 'absolute', width: 2, height: 26, top: 12 },
+  grip: { position: 'absolute', width: 12, height: 12, borderRadius: 6, borderWidth: 1.5, top: 19 },
   flag: { position: 'absolute', top: 2, width: 18, height: 16, borderRadius: 3, alignItems: 'center', justifyContent: 'center' },
   stripLabels: { position: 'absolute', left: 0, right: 0, bottom: 2, flexDirection: 'row', justifyContent: 'space-between' },
-  armRow: { height: 86, flexDirection: 'row', marginHorizontal: 12, marginTop: 6, gap: 6 },
+  armRow: { height: 64, flexDirection: 'row', marginHorizontal: 12, marginTop: 4, gap: 5 },
   arm: { flex: 1, borderRadius: 8, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   armKey: { flex: 1, alignSelf: 'stretch', alignItems: 'center', justifyContent: 'center' },
-  trackLevel: { marginHorizontal: 8, marginBottom: 6 },
-  cueKey: { width: 56, borderRadius: 8, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  trackLevel: { marginHorizontal: 6, marginBottom: 3 },
+  cueKey: { width: 46, borderRadius: 8, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   transport: { flexDirection: 'row', marginHorizontal: 14, gap: 10, marginTop: 8 },
   housing: {
     flexDirection: 'row',
