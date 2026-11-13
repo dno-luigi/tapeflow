@@ -3,7 +3,7 @@ import { View, Pressable, Text, StatusBar, Alert, Animated, PanResponder, Platfo
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import Svg, { Line, Polygon } from 'react-native-svg';
+import Svg, { Line } from 'react-native-svg';
 import * as Haptics from 'expo-haptics';
 import { useAudioRecorder, RecordingPresets, AudioModule, setAudioModeAsync } from 'expo-audio';
 import { useTheme } from '../ui/theme';
@@ -14,7 +14,7 @@ import { createMixer, buildItems, supersedeSkip } from '../lib/audio/TapeMixer';
 import { applyLevelOverride } from '../lib/audio/mixPlan';
 import { wheelTransport, DEG_PER_SEC_AT_1X, HAND_MIN, HAND_MAX } from '../lib/audio/wheel';
 import EngravedText from '../components/EngravedText';
-import { Knob, KeyCap, LedLadder, SquareLed } from '../components/hardware';
+import { Knob, KeyCap, LedLadder } from '../components/hardware';
 import TrackLevel from '../components/TrackLevel';
 import { pickAudioFile, canImportAudio } from '../lib/audio/importTake';
 import { micUnavailableReason, startMicTake, stopMicTake, micTakeLevel } from '../lib/audio/recordTake';
@@ -829,10 +829,12 @@ export default function DeckScreen() {
   };
 
   // Layout
-  // Every fixed band on the face: counter, knobs, status row, pill row, sliders,
-  // tape strip, track keys and the transport with its printed captions.
-  const chrome = insets.top + insets.bottom + 58 + 52 + 24 + 64 + 44 + 64 + 86 + 66 + 24;
-  const size = Math.max(170, Math.min(W - 32, H - chrome));
+      // Every fixed band on the face, top to bottom: display panel, control knobs,
+  // mode row, disc (with its mode controls), sliders, tape strip, track keys and
+  // the transport with its printed captions. The disc gets everything that is
+  // left, because the disc is the instrument.
+  const chrome = insets.top + insets.bottom + 76 + 50 + 24 + 34 + 40 + 54 + 78 + 62 + 26 + 32;
+  const size = Math.max(180, Math.min(W - 18, H - chrome));
   wheelSize.current = size;
 
   const span = (() => {
@@ -1014,10 +1016,16 @@ export default function DeckScreen() {
               <View style={[s.recLamp, { backgroundColor: recording ? t.danger : 'rgba(255,255,255,0.13)' }]} />
             </View>
             <EngravedText size={9} color={t.textMuted} numberOfLines={1} style={{ marginTop: 1 }}>
-              {(current && current.name) || 'UNTITLED REEL'}
+              {(recording ? 'REC · ' : '') + ((current && current.name) || 'UNTITLED TAPE')}
+            </EngravedText>
+            <EngravedText size={8} color={'rgba(255,255,255,0.28)'} style={{ marginTop: 1 }}>
+              {sr + ' kHz · 24-BIT'}
             </EngravedText>
           </Pressable>
-          <LedLadder level={level} />
+          <View style={s.meter}>
+            <EngravedText size={7} color={t.textMuted}>{recording ? 'IN' : 'OUT'}</EngravedText>
+            <LedLadder level={level} rows={9} />
+          </View>
         </View>
 
         {/* The knobs: each one opens a part of the machine. */}
@@ -1030,11 +1038,22 @@ export default function DeckScreen() {
           <Knob label="SETUP" size={36} onPress={() => nav.navigate('Back Panel')} accessibilityLabel="Flip to the back panel" />
         </View>
 
-        {/* Status row: the modes as printed words with their lamps. */}
+        {/* Mode indicators and the four track boxes, as printed on the panel. */}
         <View style={s.statusRow}>
-          <SquareLed on={cues.length > 0} color={t.warning} label="CUE" />
-          <SquareLed on={Math.abs(pitchUI - 1) > 0.001 || Math.abs(semis) > 0.01} color={t.accent} label="PITCH" />
-          <SquareLed on={lock} color={t.text} label="LOCK" />
+          {/* Grey off, white locked, red adjusting — the three states the manual
+              gives each mode. CUE has only on/off here. */}
+          <Pressable onPress={dropCue} accessibilityRole="button" accessibilityLabel="CUE mode: drop a cue at the playhead">
+            <EngravedText size={10} color={cues.length > 0 ? t.text : 'rgba(255,255,255,0.32)'}>CUE</EngravedText>
+          </Pressable>
+          <Pressable onPress={toggleLock} accessibilityRole="button" accessibilityLabel={lock ? 'PITCH locked: speed keeps the key' : 'PITCH adjusting: speed bends the key'}>
+            <EngravedText
+              size={10}
+              color={lock ? t.text : Math.abs(pitchUI - 1) > 0.001 || Math.abs(semis) > 0.01 ? t.danger : 'rgba(255,255,255,0.32)'}
+            >
+              PITCH
+            </EngravedText>
+          </Pressable>
+          <EngravedText size={9} color={'rgba(255,255,255,0.22)'} style={{ marginLeft: 2 }}>TRACK</EngravedText>
           <View style={{ flex: 1 }} />
           <View style={s.tapeChips}>
             {tracks.map((tr, i) => (
@@ -1051,11 +1070,11 @@ export default function DeckScreen() {
           </View>
         </View>
 
-        {/* The one big reel */}
+        {/* The disc: the largest thing on the screen, because it is the instrument. */}
         <View style={s.wheelArea}>
-          {/* Printed on the case above the spool, and still while the spool turns. */}
+          {/* Printed on the case over the disc, still while the spool turns. */}
           <View pointerEvents="none" style={s.wordmark}>
-            <Text style={[t.font.title, s.wordmarkTitle]}>REEL</Text>
+            <Text style={[t.font.title, s.wordmarkTitle]}>TAPEFLOW</Text>
             <EngravedText size={8} color={t.textMuted}>4-TRACK DIGITAL TAPE RECORDER</EngravedText>
           </View>
           <View
@@ -1082,11 +1101,6 @@ export default function DeckScreen() {
                 style={{ position: 'absolute', left: size * 0.07, top: size * 0.07, width: size * 0.86, height: size * 0.86, borderRadius: size * 0.43 }}
               />
             </Animated.View>
-            <View pointerEvents="none" style={[s.notch, { left: size / 2 - 8 }]}>
-              <Svg width={16} height={14} viewBox="0 0 16 14">
-                <Polygon points="0,0 16,0 8,14" fill={recording ? t.accent : t.warning} />
-              </Svg>
-            </View>
           </View>
           <View style={s.pillRow}>
             <GlassPanel radius={16} style={[s.pill, { borderColor: recording ? t.accent : glassStroke }]}>
@@ -1323,9 +1337,16 @@ export default function DeckScreen() {
           </Pressable>
         </View>
 
-        {/* Transport: keys that stand proud of the case, captioned underneath. */}
+        {/* Transport: the three capture keys, then the two wind keys, captioned
+            underneath the way they are printed on the case. */}
         <Animated.View style={[s.transport, { transform: [{ translateX: shake }] }]}>
-          <KeyCap icon="play-back" label="REW" onPress={onRew} accessibilityLabel="Rewind" active={mode === 'rew'} />
+          <KeyCap
+            tone="record"
+            label="REC"
+            onPress={onRecord}
+            accessibilityLabel={recording ? 'Stop recording' : 'Record'}
+            active={recording || anyArmed}
+          />
           <KeyCap
             icon={mode === 'play' ? 'pause' : 'play'}
             label={mode === 'play' ? 'PAUSE' : 'PLAY'}
@@ -1334,13 +1355,8 @@ export default function DeckScreen() {
             active={mode === 'play'}
           />
           <KeyCap icon="stop" label="STOP" onPress={onStop} accessibilityLabel="Stop, double tap for start of tape" />
-          <KeyCap
-            tone="record"
-            label="REC"
-            onPress={onRecord}
-            accessibilityLabel={recording ? 'Stop recording' : 'Record'}
-            active={recording || anyArmed}
-          />
+          <View style={s.transportGap} />
+          <KeyCap icon="play-back" label="REW" onPress={onRew} accessibilityLabel="Rewind" active={mode === 'rew'} />
           <KeyCap icon="play-forward" label="FF" onPress={onFF} accessibilityLabel="Fast forward" active={mode === 'ff'} />
         </Animated.View>
       </View>
@@ -1363,7 +1379,8 @@ const s = StyleSheet.create({
     shadowRadius: 8,
   },
   knobRow: { height: 52, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-around', paddingHorizontal: 30 },
-  statusRow: { height: 24, flexDirection: 'row', alignItems: 'center', gap: 14, paddingHorizontal: 18 },
+  statusRow: { height: 24, flexDirection: 'row', alignItems: 'center', gap: 16, paddingHorizontal: 18 },
+  meter: { alignItems: 'center', justifyContent: 'center', gap: 2 },
   tapeChips: { flexDirection: 'row', gap: 4 },
   tapeChip: {
     width: 20,
@@ -1374,8 +1391,8 @@ const s = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  wordmark: { alignItems: 'center', marginBottom: 14 },
-  wordmarkTitle: { fontSize: 19, lineHeight: 24, letterSpacing: 7, color: 'rgba(255,255,255,0.46)' },
+  wordmark: { alignItems: 'center', marginBottom: 6 },
+  wordmarkTitle: { fontSize: 17, lineHeight: 22, letterSpacing: 6, color: 'rgba(255,255,255,0.42)' },
   wheelArea: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   notch: { position: 'absolute', top: -6, width: 16, height: 14 },
   pillRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8, paddingHorizontal: 4 },
@@ -1394,5 +1411,6 @@ const s = StyleSheet.create({
   armKey: { flex: 1, alignSelf: 'stretch', alignItems: 'center', justifyContent: 'center' },
   trackLevel: { marginHorizontal: 8, marginBottom: 6 },
   cueKey: { width: 56, borderRadius: 8, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
-  transport: { flexDirection: 'row', height: 66, marginHorizontal: 14, gap: 7, marginTop: 8 },
+  transport: { flexDirection: 'row', height: 62, marginHorizontal: 14, gap: 7, marginTop: 8 },
+  transportGap: { width: 14 },
 });

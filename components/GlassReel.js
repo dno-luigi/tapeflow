@@ -1,62 +1,67 @@
 // The reel, drawn rather than photographed.
 //
-// The deck used to put a photo of a metal tape spool in the middle of the
-// machine. A photograph of a reel is a picture of some other device's plastic and
-// it cannot follow a new palette, so it looked pasted on. This is the reel as part
-// of the instrument: a machined graphite disc with a glass face, concentric
-// grooves, a small polished hub, and one orange index mark so the turn is legible.
+// A field recorder's disc is a piece of engineering you can read at a glance: a
+// matte face, three cut-away spoke windows, a polished hub, and one index mark so
+// the turn is legible. It used to be a glossy gradient, which looked like glass
+// jewellery and told you nothing about which way the tape was moving. This is
+// line art on a matte ground, which is both closer to the machine and cheaper to
+// draw every frame.
 //
 // Everything is drawn in SVG on a 0-100 grid and scaled to `size`, so it is sharp
 // at any size and the parent can rotate it with an Animated transform.
 import React from 'react';
-import Svg, { Defs, RadialGradient, LinearGradient as SvgLinearGradient, Stop, Circle, Line, Ellipse } from 'react-native-svg';
+import Svg, { Defs, RadialGradient, Stop, Circle, Line, Polygon } from 'react-native-svg';
 
 const TICKS = Array.from({ length: 6 }, (_, i) => i * 60);
+
+// The three cut-outs, as one wedge rotated three times. A wedge reads as a
+// machined window: wide at the rim, narrow at the hub, like the real spool. The
+// narrow end points INWARD, so the three leave a lit ring of face around the hub
+// instead of meeting in the middle and reading as one black blob.
+const WEDGE = '50,37.5 58.5,21 41.5,21';
 
 export default function GlassReel({ size = 260, accent = '#FF4A1C' }) {
   return (
     <Svg width={size} height={size} viewBox="0 0 100 100">
       <Defs>
-        {/* The disc: light where the room hits it, graphite everywhere else. */}
-        <RadialGradient id="reelFace" cx="34%" cy="24%" r="82%">
-          <Stop offset="0%" stopColor="#F4F6F8" stopOpacity="0.26" />
-          <Stop offset="30%" stopColor="#AEB6C0" stopOpacity="0.12" />
-          <Stop offset="62%" stopColor="#23272E" stopOpacity="0.72" />
-          <Stop offset="100%" stopColor="#0A0B0E" stopOpacity="0.96" />
+        {/* Barely there: one lift of room light across the face, so the disc is
+            not a flat black hole. The face itself is matte. */}
+        <RadialGradient id="reelFace" cx="34%" cy="22%" r="86%">
+          <Stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.075" />
+          <Stop offset="46%" stopColor="#FFFFFF" stopOpacity="0.015" />
+          <Stop offset="100%" stopColor="#000000" stopOpacity="0.28" />
         </RadialGradient>
-        {/* The hub sits proud of the face, so it catches more light. */}
-        <RadialGradient id="reelHub" cx="38%" cy="30%" r="72%">
-          <Stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.55" />
-          <Stop offset="55%" stopColor="#B9C1CB" stopOpacity="0.18" />
-          <Stop offset="100%" stopColor="#0B0C10" stopOpacity="0.92" />
+        <RadialGradient id="reelHub" cx="38%" cy="28%" r="76%">
+          <Stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.42" />
+          <Stop offset="58%" stopColor="#9AA3AD" stopOpacity="0.14" />
+          <Stop offset="100%" stopColor="#08090B" stopOpacity="0.9" />
         </RadialGradient>
-        <SvgLinearGradient id="reelRim" x1="0" y1="0" x2="0" y2="1">
-          <Stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.32" />
-          <Stop offset="48%" stopColor="#FFFFFF" stopOpacity="0.04" />
-          <Stop offset="100%" stopColor="#FFFFFF" stopOpacity="0.16" />
-        </SvgLinearGradient>
-        <SvgLinearGradient id="reelGloss" x1="0" y1="0" x2="0.8" y2="1">
-          <Stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.22" />
-          <Stop offset="60%" stopColor="#FFFFFF" stopOpacity="0.03" />
-          <Stop offset="100%" stopColor="#FFFFFF" stopOpacity="0" />
-        </SvgLinearGradient>
       </Defs>
 
-      <Circle cx="50" cy="50" r="48" fill="url(#reelFace)" />
-      <Circle cx="50" cy="50" r="47.5" fill="none" stroke="url(#reelRim)" strokeWidth="1" />
+      {/* The face and its two machined rings. */}
+      <Circle cx="50" cy="50" r="48.4" fill="#1A1D21" />
+      <Circle cx="50" cy="50" r="48.4" fill="url(#reelFace)" />
+      <Circle cx="50" cy="50" r="48" fill="none" stroke="#FFFFFF" strokeOpacity="0.16" strokeWidth="0.7" />
+      <Circle cx="50" cy="50" r="43.5" fill="none" stroke="#FFFFFF" strokeOpacity="0.06" strokeWidth="0.5" />
 
-      {/* Machined grooves, thinner as they move out: the thing you see on a disc
-          that has been turned, and the only texture on the face. */}
-      <Circle cx="50" cy="50" r="41" fill="none" stroke="#FFFFFF" strokeOpacity="0.055" strokeWidth="0.5" />
-      <Circle cx="50" cy="50" r="34" fill="none" stroke="#FFFFFF" strokeOpacity="0.05" strokeWidth="0.5" />
-      <Circle cx="50" cy="50" r="27" fill="none" stroke="#FFFFFF" strokeOpacity="0.06" strokeWidth="0.55" />
-      <Circle cx="50" cy="50" r="20" fill="none" stroke="#FFFFFF" strokeOpacity="0.075" strokeWidth="0.6" />
+      {/* Three spoke windows, cut clean out of the face. */}
+      {[0, 120, 240].map((deg) => (
+        <Polygon
+          key={deg}
+          points={WEDGE}
+          fill="#07080A"
+          stroke="#FFFFFF"
+          strokeOpacity="0.20"
+          strokeWidth="0.5"
+          transform={'rotate(' + deg + ' 50 50)'}
+        />
+      ))}
 
       {/* Six engraved marks near the rim — they make the rotation readable. */}
       {TICKS.map((deg) => {
         const a = (deg * Math.PI) / 180;
-        const r1 = 43.2;
-        const r2 = 46.4;
+        const r1 = 44.4;
+        const r2 = 47.2;
         return (
           <Line
             key={deg}
@@ -65,21 +70,20 @@ export default function GlassReel({ size = 260, accent = '#FF4A1C' }) {
             x2={50 + r2 * Math.sin(a)}
             y2={50 - r2 * Math.cos(a)}
             stroke="#FFFFFF"
-            strokeOpacity="0.14"
+            strokeOpacity="0.16"
             strokeWidth="0.6"
           />
         );
       })}
 
-      {/* The glass face: a soft highlight across the upper left, no hard edge. */}
-      <Ellipse cx="36" cy="30" rx="26" ry="15" fill="url(#reelGloss)" transform="rotate(-28 36 30)" />
+      {/* The hub: a boss with its own shoulder and a spindle hole. */}
+      <Circle cx="50" cy="50" r="10.5" fill="url(#reelHub)" />
+      <Circle cx="50" cy="50" r="10.5" fill="none" stroke="#FFFFFF" strokeOpacity="0.22" strokeWidth="0.55" />
+      <Circle cx="50" cy="50" r="5" fill="#0C0E11" stroke="#FFFFFF" strokeOpacity="0.16" strokeWidth="0.5" />
+      <Circle cx="50" cy="50" r="1.7" fill="#040506" />
 
-      <Circle cx="50" cy="50" r="10" fill="url(#reelHub)" />
-      <Circle cx="50" cy="50" r="10" fill="none" stroke="#FFFFFF" strokeOpacity="0.20" strokeWidth="0.5" />
-      <Circle cx="50" cy="50" r="3.1" fill="#0A0B0E" stroke="#FFFFFF" strokeOpacity="0.16" strokeWidth="0.5" />
-
-      {/* One orange index mark, the same accent as the record lamp. */}
-      <Circle cx="50" cy="5.6" r="1.4" fill={accent} fillOpacity="0.95" />
+      {/* One index mark at the rim, the same accent as the record lamp. */}
+      <Circle cx="50" cy="6.2" r="1.5" fill={accent} fillOpacity="0.95" />
     </Svg>
   );
 }
