@@ -14,7 +14,7 @@ import { createMixer, buildItems, supersedeSkip } from '../lib/audio/TapeMixer';
 import { applyLevelOverride } from '../lib/audio/mixPlan';
 import { wheelTransport, DEG_PER_SEC_AT_1X, HAND_MIN, HAND_MAX } from '../lib/audio/wheel';
 import EngravedText from '../components/EngravedText';
-import VUMeter from '../components/VUMeter';
+import { Knob, KeyCap, LedLadder, SquareLed } from '../components/hardware';
 import TrackLevel from '../components/TrackLevel';
 import { pickAudioFile, canImportAudio } from '../lib/audio/importTake';
 import { micUnavailableReason, startMicTake, stopMicTake, micTakeLevel } from '../lib/audio/recordTake';
@@ -829,7 +829,9 @@ export default function DeckScreen() {
   };
 
   // Layout
-  const chrome = insets.top + insets.bottom + 44 + 64 + 40 + 64 + 86 + 64 + 28 + 64;
+  // Every fixed band on the face: counter, knobs, status row, pill row, sliders,
+  // tape strip, track keys and the transport with its printed captions.
+  const chrome = insets.top + insets.bottom + 58 + 52 + 24 + 64 + 44 + 64 + 86 + 66 + 24;
   const size = Math.max(170, Math.min(W - 32, H - chrome));
   wheelSize.current = size;
 
@@ -991,63 +993,71 @@ export default function DeckScreen() {
     }
   };
 
-  const key = (icon, onPress, label, on) => (
-    <GlassPanel key={label} radius={12} style={[s.keyShell, { borderColor: on ? t.warning : glassStroke }]}>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={label}
-        onPress={onPress}
-        style={({ pressed }) => [s.keyInner, { opacity: pressed ? 0.6 : 1 }]}
-      >
-        <Ionicons name={icon} size={28} color={on ? t.warning : t.text} />
-        {on ? <View style={{ position: 'absolute', bottom: 7, width: 20, height: 2, borderRadius: 2, backgroundColor: t.warning }} /> : null}
-      </Pressable>
-    </GlassPanel>
-  );
-
   return (
     <View style={{ flex: 1, backgroundColor: t.bg }} {...swipe.panHandlers}>
       <StatusBar barStyle="light-content" translucent backgroundColor="transparent" />
       {/* Obsidian glass ground: the deck is a slab, not a photograph. */}
       <ObsidianBackdrop />
       <View style={{ flex: 1, paddingTop: insets.top, paddingBottom: insets.bottom + 4 }}>
-        {/* Top bar */}
+        {/* Top bar: the counter is the face of the machine, so it leads. */}
         <View style={s.top}>
-          <Pressable onPress={() => nav.navigate('Sessions')} accessibilityRole="button" accessibilityLabel="Open sessions" style={s.topLeft}>
-            <Ionicons name="albums-outline" size={20} color={t.warning} />
-            <EngravedText size={12} color={t.text} numberOfLines={1} style={{ marginLeft: 8, flexShrink: 1 }}>
-              {(current && current.name) || 'Reel'}
+          <Pressable
+            onPress={() => nav.navigate('Sessions')}
+            onLongPress={() => { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {}); setOffset(hud.pos); flash('COUNTER RESET'); }}
+            delayLongPress={500}
+            accessibilityRole="button"
+            accessibilityLabel={'Tape counter ' + fmt(display) + '. Open sessions; hold to reset the counter.'}
+            style={s.topLeft}
+          >
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <Text style={[t.font.title, s.timecode, { color: recording ? t.danger : t.text }]}>{fmt(display)}</Text>
+              <View style={[s.recLamp, { backgroundColor: recording ? t.danger : 'rgba(255,255,255,0.13)' }]} />
+            </View>
+            <EngravedText size={9} color={t.textMuted} numberOfLines={1} style={{ marginTop: 1 }}>
+              {(current && current.name) || 'UNTITLED REEL'}
             </EngravedText>
           </Pressable>
-          {canImportAudio() ? (
-            <Pressable onPress={onImport} accessibilityRole="button" accessibilityLabel="Import an audio file as a take" style={s.topBtn}>
-              <Ionicons name="cloud-upload-outline" size={22} color={t.textMuted} />
-            </Pressable>
-          ) : null}
-          <Pressable onPress={onExport} accessibilityRole="button" accessibilityLabel="Save the reel as a WAV file" style={s.topBtn}>
-            <Ionicons name="download-outline" size={22} color={t.textMuted} />
-          </Pressable>
-          <Pressable onPress={() => nav.navigate('Back Panel')} accessibilityRole="button" accessibilityLabel="Flip to back panel" style={s.topBtn}>
-            <Ionicons name="settings-outline" size={22} color={t.textMuted} />
-          </Pressable>
+          <LedLadder level={level} />
         </View>
 
-        {/* Counter and level */}
-        <View style={s.readout}>
-          <GlassPanel radius={10} style={[s.counter, { borderColor: recording ? t.accent : glassStroke }]}>
-            <Text style={[t.font.title, { color: recording ? t.accent : t.warning, fontSize: 30, lineHeight: 40, letterSpacing: 1 }]}>{fmt(display)}</Text>
-            <Pressable
-              accessibilityLabel="Reset tape counter, hold"
-              hitSlop={14}
-              onLongPress={() => { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {}); setOffset(hud.pos); flash('COUNTER RESET'); }}
-              style={[s.pinhole, { backgroundColor: glassStroke }]}
-            />
-          </GlassPanel>
-          <VUMeter width={112} height={56} level={level} label="IN" />
+        {/* The knobs: each one opens a part of the machine. */}
+        <View style={s.knobRow}>
+          <Knob label="LIBRARY" size={36} onPress={() => nav.navigate('Sessions')} accessibilityLabel="Open the tape library" />
+          {canImportAudio() ? (
+            <Knob label="IMPORT" size={36} onPress={onImport} accessibilityLabel="Import an audio file as a take" />
+          ) : null}
+          <Knob label="SAVE" size={36} onPress={onExport} accessibilityLabel="Save the reel as a WAV file" />
+          <Knob label="SETUP" size={36} onPress={() => nav.navigate('Back Panel')} accessibilityLabel="Flip to the back panel" />
+        </View>
+
+        {/* Status row: the modes as printed words with their lamps. */}
+        <View style={s.statusRow}>
+          <SquareLed on={cues.length > 0} color={t.warning} label="CUE" />
+          <SquareLed on={Math.abs(pitchUI - 1) > 0.001 || Math.abs(semis) > 0.01} color={t.accent} label="PITCH" />
+          <SquareLed on={lock} color={t.text} label="LOCK" />
+          <View style={{ flex: 1 }} />
+          <View style={s.tapeChips}>
+            {tracks.map((tr, i) => (
+              <Pressable
+                key={i}
+                onPress={() => toggleArm(i)}
+                accessibilityRole="button"
+                accessibilityLabel={'Track ' + (i + 1) + (tr.armed ? ' armed' : ' not armed')}
+                style={[s.tapeChip, tr.armed && { backgroundColor: t.accent, borderColor: t.accent }]}
+              >
+                <Text style={[t.font.caption, { color: tr.armed ? t.onAccent : t.textMuted, fontSize: 9, lineHeight: 12 }]}>{'0' + (i + 1)}</Text>
+              </Pressable>
+            ))}
+          </View>
         </View>
 
         {/* The one big reel */}
         <View style={s.wheelArea}>
+          {/* Printed on the case above the spool, and still while the spool turns. */}
+          <View pointerEvents="none" style={s.wordmark}>
+            <Text style={[t.font.title, s.wordmarkTitle]}>REEL</Text>
+            <EngravedText size={8} color={t.textMuted}>4-TRACK DIGITAL TAPE RECORDER</EngravedText>
+          </View>
           <View
             style={{ width: size, height: size }}
             {...wheel.panHandlers}
@@ -1313,45 +1323,25 @@ export default function DeckScreen() {
           </Pressable>
         </View>
 
-        {/* Transport */}
+        {/* Transport: keys that stand proud of the case, captioned underneath. */}
         <Animated.View style={[s.transport, { transform: [{ translateX: shake }] }]}>
-          {key('play-back', onRew, 'Rewind', mode === 'rew')}
-          {key(mode === 'play' ? 'pause' : 'play', onPlay, mode === 'play' ? 'Pause' : 'Play', mode === 'play')}
-          {key('stop', onStop, 'Stop, double tap for start of tape', false)}
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={recording ? 'Stop recording' : 'Record'}
+          <KeyCap icon="play-back" label="REW" onPress={onRew} accessibilityLabel="Rewind" active={mode === 'rew'} />
+          <KeyCap
+            icon={mode === 'play' ? 'pause' : 'play'}
+            label={mode === 'play' ? 'PAUSE' : 'PLAY'}
+            onPress={onPlay}
+            accessibilityLabel={mode === 'play' ? 'Pause' : 'Play'}
+            active={mode === 'play'}
+          />
+          <KeyCap icon="stop" label="STOP" onPress={onStop} accessibilityLabel="Stop, double tap for start of tape" />
+          <KeyCap
+            tone="record"
+            label="REC"
             onPress={onRecord}
-            style={({ pressed }) => [
-              s.key,
-              {
-                backgroundColor: recording || anyArmed ? t.accent : t.accentSoft,
-                borderColor: t.accent,
-                shadowColor: t.accent,
-                shadowOffset: { width: 0, height: 0 },
-                shadowOpacity: recording ? 1 : anyArmed ? 0.7 : 0,
-                shadowRadius: recording ? 18 : 12,
-                elevation: recording || anyArmed ? 10 : 0,
-                opacity: pressed ? 0.8 : 1,
-              },
-            ]}
-          >
-            {/* The record key is a lamp, not a picture of one. */}
-            <View
-              style={{
-                width: 18,
-                height: 18,
-                borderRadius: 9,
-                backgroundColor: recording ? '#FFFFFF' : t.onAccent,
-                opacity: recording || anyArmed ? 1 : 0.45,
-                shadowColor: t.accent,
-                shadowOpacity: recording ? 1 : 0.7,
-                shadowRadius: recording ? 14 : 8,
-                shadowOffset: { width: 0, height: 0 },
-              }}
-            />
-          </Pressable>
-          {key('play-forward', onFF, 'Fast forward', mode === 'ff')}
+            accessibilityLabel={recording ? 'Stop recording' : 'Record'}
+            active={recording || anyArmed}
+          />
+          <KeyCap icon="play-forward" label="FF" onPress={onFF} accessibilityLabel="Fast forward" active={mode === 'ff'} />
         </Animated.View>
       </View>
     </View>
@@ -1359,12 +1349,33 @@ export default function DeckScreen() {
 }
 
 const s = StyleSheet.create({
-  top: { height: 44, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12 },
-  topLeft: { flex: 1, minHeight: 44, flexDirection: 'row', alignItems: 'center', paddingRight: 8 },
-  topBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
-  readout: { height: 64, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16 },
-  counter: { width: 168, height: 52, borderRadius: 6, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
-  pinhole: { position: 'absolute', right: 6, bottom: 6, width: 8, height: 8, borderRadius: 4 },
+  top: { height: 58, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16 },
+  topLeft: { flex: 1, minHeight: 56, justifyContent: 'center', paddingRight: 10 },
+  timecode: { fontSize: 34, lineHeight: 38, letterSpacing: 1.5, fontVariant: ['tabular-nums'] },
+  recLamp: {
+    width: 9,
+    height: 9,
+    borderRadius: 5,
+    marginLeft: 10,
+    shadowColor: '#FF3B1F',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.85,
+    shadowRadius: 8,
+  },
+  knobRow: { height: 52, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-around', paddingHorizontal: 30 },
+  statusRow: { height: 24, flexDirection: 'row', alignItems: 'center', gap: 14, paddingHorizontal: 18 },
+  tapeChips: { flexDirection: 'row', gap: 4 },
+  tapeChip: {
+    width: 20,
+    height: 14,
+    borderRadius: 2,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.16)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  wordmark: { alignItems: 'center', marginBottom: 14 },
+  wordmarkTitle: { fontSize: 19, lineHeight: 24, letterSpacing: 7, color: 'rgba(255,255,255,0.46)' },
   wheelArea: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   notch: { position: 'absolute', top: -6, width: 16, height: 14 },
   pillRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8, paddingHorizontal: 4 },
@@ -1383,8 +1394,5 @@ const s = StyleSheet.create({
   armKey: { flex: 1, alignSelf: 'stretch', alignItems: 'center', justifyContent: 'center' },
   trackLevel: { marginHorizontal: 8, marginBottom: 6 },
   cueKey: { width: 56, borderRadius: 8, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
-  transport: { flexDirection: 'row', height: 64, marginHorizontal: 12, gap: 6, marginTop: 8 },
-  key: { flex: 1, height: 64, borderRadius: 10, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
-  keyShell: { flex: 1, height: 64 },
-  keyInner: { height: 64, minWidth: 44, alignItems: 'center', justifyContent: 'center' },
+  transport: { flexDirection: 'row', height: 66, marginHorizontal: 14, gap: 7, marginTop: 8 },
 });
