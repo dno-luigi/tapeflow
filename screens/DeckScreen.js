@@ -26,6 +26,7 @@ import Slider from '../components/Slider';
 import { exportReel, canExport } from '../lib/audio/exportReel';
 import { rememberTakeAudio, hydrateTakeAudio } from '../lib/audio/takeStore';
 import { tapeTimeAt } from '../lib/audio/scrub';
+import { loopJump } from '../lib/audio/loop';
 
 // Wheel physics. One turn of the reel moves SEC_PER_REV seconds of tape at normal speed.
 // The one-speed reference comes from the transport rule, so a hand turning at that
@@ -171,9 +172,21 @@ export default function DeckScreen() {
   const [levelDrag, setLevelDrag] = useState(null);
   const [speed, setSpeed] = useState(1);
   const [semis, setSemis] = useState(0);
-  // PITCH LOCK is the default: the reel is a tempo control first, and the key only
-  // rides the speed when the deck is told to behave like a tape.
-  const [lock, setLock] = useState(true);
+  // Each mode key cycles through its own states, exactly as the machine's do, and
+  // the ± pair belongs to whichever mode is selected:
+  //   PITCH  off → adjusting (speed bends the key) → locked (speed keeps it)
+  //   CUE    off → add
+  //   LOOP   off → set the IN and OUT points → play the loop
+  const [pitchMode, setPitchMode] = useState(2); // 2 is locked, the default
+  const [cueMode, setCueMode] = useState(0);
+  const [loopMode, setLoopMode] = useState(0);
+  const [loopIn, setLoopIn] = useState(null);
+  const [loopOut, setLoopOut] = useState(null);
+  const lock = pitchMode === 2;
+  // The animation loop is created once, so it reads the loop from here rather than
+  // from a closure that would still be holding the points from the first render.
+  const loopRef = useRef({ mode: 0, in: null, out: null });
+  loopRef.current = { mode: loopMode, in: loopIn, out: loopOut };
   // The PITCH slider bends the tape's speed, so the key bends with it. 1 is no bend,
   // and it is a ref because the transport reads it every frame: putting it in state
   // re-rendered the whole deck dozens of times a second and froze it.
@@ -457,6 +470,13 @@ export default function DeckScreen() {
         }
         p.angle = (p.angle + p.vel * dt) % 360;
         p.pos += (p.vel / normalRef.current) * dt;
+        // A loop is the tape running in a circle: at the OUT point the head is put
+        // back at IN, and the mixer seeks because its position is the truth. The
+        // rule itself lives in lib/audio/loop.js so it can be tested.
+        if (p.mode === 'play') {
+          const back = loopJump(p.pos, loopRef.current);
+          if (back != null) p.pos = back;
+        }
         if (p.pos <= 0) {
           p.pos = 0;
           if (p.vel < 0) p.vel = 0;
@@ -829,12 +849,14 @@ export default function DeckScreen() {
   };
 
   // Layout
-      // Every fixed band on the face, top to bottom: display panel, control knobs,
-  // mode row, disc (with its mode controls), sliders, tape strip, track keys and
-  // the transport with its printed captions. The disc gets everything that is
-  // left, because the disc is the instrument.
-  const chrome = insets.top + insets.bottom + 76 + 50 + 24 + 34 + 40 + 54 + 78 + 62 + 26 + 32;
-  const size = Math.max(180, Math.min(W - 18, H - chrome));
+      // Every fixed band on the face, top to bottom: display panel, control knobs, the
+  // mode row, the mode keys with their captions, the sliders, the tape strip, the
+  // track keys and the transport. All of those are measured by the layout; the
+  // disc takes what is left, and its own box is measured rather than guessed, so
+  // it can never push the captions off the bottom of the screen.
+  const [wheelBox, setWheelBox] = useState(0);
+  const chrome = insets.top + insets.bottom + 58 + 52 + 24 + 46 + 40 + 54 + 78 + 70 + 16;
+  const size = Math.max(140, Math.min(W - 18, (wheelBox || H - chrome) - 96));
   wheelSize.current = size;
 
   const span = (() => {
@@ -961,15 +983,67 @@ export default function DeckScreen() {
     });
   const speedPanRef = useRef(null);
   if (!speedPanRef.current) speedPanRef.current = finePan('speed');
-  const speedPan = speedPanRef.current;
   const keyPanRef = useRef(null);
   if (!keyPanRef.current) keyPanRef.current = finePan('key');
-  const keyPan = keyPanRef.current;
-  const toggleLock = () => {
+  const cyclePitch = () => {
     Haptics.selectionAsync().catch(() => {});
-    const next = !lock;
-    setLock(next);
-    flash(next ? 'PITCH LOCK — SPEED KEEPS THE KEY' : 'TAPE PITCH — SPEED BENDS THE KEY');
+    const next = (pitchMode + 1) % 3;
+    setPitchMode(next);
+    if (next === 0) {
+      // Off means the tape at its own speed, and the key back where it was.
+      trimRef.current = 1;
+      semisRef.current = 0;
+      setPitchUI(1);
+      setSemis(0);
+      flash('PITCH OFF — 100%');
+    } else if (next === 1) {
+      flash('PITCH ADJUST — ± BENDS THE TAPE');
+    } else {
+      flash('PITCH LOCKED — SPEED KEEPS THE KEY');
+    }
+  };
+  const cycleCue = () => {
+    Haptics.selectionAsync().catch(() => {});
+    const next = cueMode === 1 ? 0 : 1;
+    setCueMode(next);
+    flash(next ? 'CUE — ± ADDS AND REMOVES' : 'CUE OFF');
+  };
+  const cycleLoop = () => {
+    Haptics.selectionAsync().catch(() => {});
+    const next = (loopMode + 1) % 3;
+    setLoopMode(next);
+    if (next === 0) flash(loopIn != null && loopOut != null ? 'LOOP OFF' : 'NO LOOP');
+    else if (next === 1) flash('LOOP — + SETS IN, − SETS OUT');
+    else if (loopIn != null && loopOut != null) flash('LOOP PLAY ' + fmt(loopIn) + ' → ' + fmt(loopOut));
+    else flash('SET AN IN AND AN OUT FIRST');
+  };
+  // The ± pair. What it does is the selected mode's job; with no mode selected it
+  // is the transport's speed, which is the one thing always worth a nudge.
+  const modeStep = (dir) => {
+    if (loopMode === 1) {
+      if (dir > 0) {
+        const at = hud.pos;
+        setLoopIn(at);
+        if (loopOut != null && loopOut <= at) setLoopOut(null);
+        flash('LOOP IN ' + fmt(at));
+      } else {
+        if (loopIn == null) { flash('SET THE IN POINT FIRST'); return; }
+        if (hud.pos <= loopIn) { flash('THE OUT POINT MUST FOLLOW THE IN'); return; }
+        setLoopOut(hud.pos);
+        flash('LOOP OUT ' + fmt(hud.pos));
+      }
+      return;
+    }
+    if (cueMode === 1) {
+      if (dir > 0) { dropCue(); return; }
+      const last = cues[cues.length - 1];
+      if (!last) { flash('NO CUE TO REMOVE'); return; }
+      safe(() => studio.removeCue && studio.removeCue(last.id));
+      flash('CUE REMOVED');
+      return;
+    }
+    if (pitchMode === 1) { nudgeKey(dir); return; }
+    nudgeSpeed(dir);
   };
   const onExport = async () => {
     if (mode === 'rec') { flash('STOP RECORDING FIRST'); return; }
@@ -1031,6 +1105,12 @@ export default function DeckScreen() {
         {/* The knobs: each one opens a part of the machine. */}
         <View style={s.knobRow}>
           <Knob label="LIBRARY" size={36} onPress={() => nav.navigate('Sessions')} accessibilityLabel="Open the tape library" />
+          <Knob
+            label="TAKES"
+            size={36}
+            onPress={() => nav.navigate('Takes', { track: Math.max(0, tracks.findIndex((tr) => tr.armed)) })}
+            accessibilityLabel="Open the takes on the armed track"
+          />
           {canImportAudio() ? (
             <Knob label="IMPORT" size={36} onPress={onImport} accessibilityLabel="Import an audio file as a take" />
           ) : null}
@@ -1040,20 +1120,18 @@ export default function DeckScreen() {
 
         {/* Mode indicators and the four track boxes, as printed on the panel. */}
         <View style={s.statusRow}>
-          {/* Grey off, white locked, red adjusting — the three states the manual
-              gives each mode. CUE has only on/off here. */}
-          <Pressable onPress={dropCue} accessibilityRole="button" accessibilityLabel="CUE mode: drop a cue at the playhead">
-            <EngravedText size={10} color={cues.length > 0 ? t.text : 'rgba(255,255,255,0.32)'}>CUE</EngravedText>
+          {/* The three modes, in the manual's colours: grey off, red adjusting,
+              white locked or playing. Each word is the key that cycles it. */}
+          <Pressable onPress={cycleCue} accessibilityRole="button" accessibilityLabel="Cue mode">
+            <EngravedText size={10} color={cueMode === 1 ? t.danger : cues.length > 0 ? t.text : 'rgba(255,255,255,0.32)'}>CUE</EngravedText>
           </Pressable>
-          <Pressable onPress={toggleLock} accessibilityRole="button" accessibilityLabel={lock ? 'PITCH locked: speed keeps the key' : 'PITCH adjusting: speed bends the key'}>
-            <EngravedText
-              size={10}
-              color={lock ? t.text : Math.abs(pitchUI - 1) > 0.001 || Math.abs(semis) > 0.01 ? t.danger : 'rgba(255,255,255,0.32)'}
-            >
-              PITCH
-            </EngravedText>
+          <Pressable onPress={cyclePitch} accessibilityRole="button" accessibilityLabel="Pitch mode">
+            <EngravedText size={10} color={pitchMode === 1 ? t.danger : pitchMode === 2 ? t.text : 'rgba(255,255,255,0.32)'}>PITCH</EngravedText>
           </Pressable>
-          <EngravedText size={9} color={'rgba(255,255,255,0.22)'} style={{ marginLeft: 2 }}>TRACK</EngravedText>
+          <Pressable onPress={cycleLoop} accessibilityRole="button" accessibilityLabel="Loop mode">
+            <EngravedText size={10} color={loopMode === 1 ? t.danger : loopMode === 2 ? t.text : 'rgba(255,255,255,0.32)'}>LOOP</EngravedText>
+          </Pressable>
+          <EngravedText size={9} color={'rgba(255,255,255,0.22)'} style={{ marginLeft: 2 }}>TAPE</EngravedText>
           <View style={{ flex: 1 }} />
           <View style={s.tapeChips}>
             {tracks.map((tr, i) => (
@@ -1071,7 +1149,7 @@ export default function DeckScreen() {
         </View>
 
         {/* The disc: the largest thing on the screen, because it is the instrument. */}
-        <View style={s.wheelArea}>
+        <View style={s.wheelArea} onLayout={(e) => setWheelBox(e.nativeEvent.layout.height || 0)}>
           {/* Printed on the case over the disc, still while the spool turns. */}
           <View pointerEvents="none" style={s.wordmark}>
             <Text style={[t.font.title, s.wordmarkTitle]}>TAPEFLOW</Text>
@@ -1102,86 +1180,33 @@ export default function DeckScreen() {
               />
             </Animated.View>
           </View>
-          <View style={s.pillRow}>
-            <GlassPanel radius={16} style={[s.pill, { borderColor: recording ? t.accent : glassStroke }]}>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Slower"
-                hitSlop={10}
-                onPress={() => nudgeSpeed(-1)}
-                onPressIn={() => startRepeat(() => nudgeSpeed(-1))}
-                onPressOut={stopRepeat}
-                style={s.pillStep}
-              >
-                <Ionicons name="remove" size={16} color={recording ? t.accent : t.warning} />
-              </Pressable>
-              <View
-                {...speedPan.panHandlers}
-                style={s.pillValue}
-                accessibilityLabel={'Speed ' + speedText + ', drag to fine tune'}
-              >
-                <EngravedText size={12} color={recording ? t.accent : t.warning}>
-                  {recording ? 'REC · 100%' : mode === 'ff' || mode === 'rew' ? 'SPOOLING' : moving ? speedPct + '%' : speedText}
-                </EngravedText>
-              </View>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Faster"
-                hitSlop={10}
-                onPress={() => nudgeSpeed(1)}
-                onPressIn={() => startRepeat(() => nudgeSpeed(1))}
-                onPressOut={stopRepeat}
-                style={s.pillStep}
-              >
-                <Ionicons name="add" size={16} color={recording ? t.accent : t.warning} />
-              </Pressable>
-            </GlassPanel>
-
-            <GlassPanel radius={16} style={[s.pill, { borderColor: semis ? t.accent : glassStroke }]}>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Lower the key"
-                hitSlop={10}
-                onPress={() => nudgeKey(-1)}
-                onPressIn={() => startRepeat(() => nudgeKey(-1))}
-                onPressOut={stopRepeat}
-                style={s.pillStep}
-              >
-                <Ionicons name="remove" size={16} color={semis ? t.accent : t.warning} />
-              </Pressable>
-              <View
-                {...keyPan.panHandlers}
-                style={s.pillValue}
-                accessibilityLabel={'Key ' + keyText + ' semitones, drag to fine tune'}
-              >
-                <EngravedText size={12} color={semis ? t.accent : t.warning}>{'KEY ' + keyText}</EngravedText>
-              </View>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Raise the key"
-                hitSlop={10}
-                onPress={() => nudgeKey(1)}
-                onPressIn={() => startRepeat(() => nudgeKey(1))}
-                onPressOut={stopRepeat}
-                style={s.pillStep}
-              >
-                <Ionicons name="add" size={16} color={semis ? t.accent : t.warning} />
-              </Pressable>
-            </GlassPanel>
-
-            <Pressable
-              accessibilityRole="switch"
-              accessibilityState={{ checked: lock }}
-              accessibilityLabel={lock ? 'Pitch lock on: speed keeps the key' : 'Tape pitch: speed bends the key'}
-              onPress={toggleLock}
-            >
-              <GlassPanel radius={16} style={[s.pill, { borderColor: lock ? glassStroke : t.accent }]}>
-                <Ionicons name={lock ? 'lock-closed' : 'lock-open'} size={13} color={lock ? t.textMuted : t.accent} />
-                <EngravedText size={10} color={lock ? t.textMuted : t.accent} style={{ marginLeft: 5 }}>
-                  {lock ? 'PITCH LOCK' : 'TAPE PITCH'}
-                </EngravedText>
-              </GlassPanel>
-            </Pressable>
+          {/* The mode keys and the one ± pair, as they sit below the disc on the
+              machine. The pair belongs to whichever mode is selected. */}
+          <View style={s.functionRow}>
+            <Knob
+              label="CUE"
+              size={34}
+              active={cueMode === 1}
+              onPress={cycleCue}
+              accessibilityLabel={cueMode === 1 ? 'Cue: add and remove with ±' : 'Cue off'}
+            />
+            <Knob
+              label="PITCH"
+              size={34}
+              active={pitchMode === 1}
+              onPress={cyclePitch}
+              accessibilityLabel={pitchMode === 1 ? 'Pitch adjusting' : pitchMode === 2 ? 'Pitch locked' : 'Pitch off'}
+            />
+            <Knob
+              label="LOOP"
+              size={34}
+              active={loopMode !== 0}
+              onPress={cycleLoop}
+              accessibilityLabel={loopMode === 1 ? 'Loop: set the points' : loopMode === 2 ? 'Loop playing' : 'Loop off'}
+            />
+            <View style={{ flex: 1 }} />
+            <Knob label="−" size={34} onPress={() => modeStep(-1)} accessibilityLabel="Minus" />
+            <Knob label="+" size={34} onPress={() => modeStep(1)} accessibilityLabel="Plus" />
           </View>
         </View>
 
@@ -1245,6 +1270,20 @@ export default function DeckScreen() {
               <View style={{ position: 'absolute', left: px(recFrom), width: Math.max(2, px(hud.pos) - px(recFrom)), top: 0, bottom: 0, backgroundColor: t.accent }} />
             ) : null}
           </View>
+          {/* The loop, drawn on the tape where it sits. */}
+          {loopIn != null && loopOut != null ? (
+            <View
+              pointerEvents="none"
+              style={[
+                s.loopBar,
+                {
+                  left: px(loopIn),
+                  width: Math.max(3, px(loopOut) - px(loopIn)),
+                  backgroundColor: loopMode === 2 ? t.accent : 'rgba(255,255,255,0.22)',
+                },
+              ]}
+            />
+          ) : null}
           <View pointerEvents="none" style={[s.playhead, { left: px(hud.pos) - 1, backgroundColor: recording ? t.accent : t.text }]} />
           {/* A grab handle on the head, so the bar reads as something you pull. */}
           <View pointerEvents="none" style={[s.grip, { left: px(hud.pos) - 6, borderColor: recording ? t.accent : t.warning, backgroundColor: t.bg }]} />
@@ -1340,24 +1379,28 @@ export default function DeckScreen() {
         {/* Transport: the three capture keys, then the two wind keys, captioned
             underneath the way they are printed on the case. */}
         <Animated.View style={[s.transport, { transform: [{ translateX: shake }] }]}>
-          <KeyCap
-            tone="record"
-            label="REC"
-            onPress={onRecord}
-            accessibilityLabel={recording ? 'Stop recording' : 'Record'}
-            active={recording || anyArmed}
-          />
-          <KeyCap
-            icon={mode === 'play' ? 'pause' : 'play'}
-            label={mode === 'play' ? 'PAUSE' : 'PLAY'}
-            onPress={onPlay}
-            accessibilityLabel={mode === 'play' ? 'Pause' : 'Play'}
-            active={mode === 'play'}
-          />
-          <KeyCap icon="stop" label="STOP" onPress={onStop} accessibilityLabel="Stop, double tap for start of tape" />
-          <View style={s.transportGap} />
-          <KeyCap icon="play-back" label="REW" onPress={onRew} accessibilityLabel="Rewind" active={mode === 'rew'} />
-          <KeyCap icon="play-forward" label="FF" onPress={onFF} accessibilityLabel="Fast forward" active={mode === 'ff'} />
+          {/* Two housings, as on the case: the capture keys, then the wind keys. */}
+          <View style={[s.housing, { flex: 3 }]}>
+            <KeyCap
+              tone="record"
+              label="REC"
+              onPress={onRecord}
+              accessibilityLabel={recording ? 'Stop recording' : 'Record'}
+              active={recording || anyArmed}
+            />
+            <KeyCap
+              icon={mode === 'play' ? 'pause' : 'play'}
+              label={mode === 'play' ? 'PAUSE' : 'PLAY'}
+              onPress={onPlay}
+              accessibilityLabel={mode === 'play' ? 'Pause' : 'Play'}
+              active={mode === 'play'}
+            />
+            <KeyCap icon="stop" label="STOP" onPress={onStop} accessibilityLabel="Stop, double tap for start of tape" />
+          </View>
+          <View style={[s.housing, { flex: 2 }]}>
+            <KeyCap icon="play-back" label="REW" onPress={onRew} accessibilityLabel="Rewind" active={mode === 'rew'} />
+            <KeyCap icon="play-forward" label="FF" onPress={onFF} accessibilityLabel="Fast forward" active={mode === 'ff'} />
+          </View>
         </Animated.View>
       </View>
     </View>
@@ -1391,15 +1434,16 @@ const s = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  wordmark: { alignItems: 'center', marginBottom: 6 },
+  wordmark: { alignItems: 'center', marginBottom: 2 },
   wordmarkTitle: { fontSize: 17, lineHeight: 22, letterSpacing: 6, color: 'rgba(255,255,255,0.42)' },
   wheelArea: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   notch: { position: 'absolute', top: -6, width: 16, height: 14 },
-  pillRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8, paddingHorizontal: 4 },
+  functionRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 14, marginTop: 4, paddingHorizontal: 18 },
+  loopBar: { position: 'absolute', top: 8, height: 3, borderRadius: 2 },
   pill: { height: 32, paddingHorizontal: 4, borderRadius: 16, borderWidth: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
   pillStep: { width: 28, height: 28, alignItems: 'center', justifyContent: 'center' },
   pillValue: { minWidth: 62, height: 28, alignItems: 'center', justifyContent: 'center' },
-  sliderRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, marginTop: 10 },
+  sliderRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, marginTop: 6 },
   strip: { height: 64, marginHorizontal: 20, justifyContent: 'center' },
   stripBar: { height: 14, borderRadius: 3, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden' },
   playhead: { position: 'absolute', width: 2, height: 30, top: 14 },
@@ -1411,6 +1455,14 @@ const s = StyleSheet.create({
   armKey: { flex: 1, alignSelf: 'stretch', alignItems: 'center', justifyContent: 'center' },
   trackLevel: { marginHorizontal: 8, marginBottom: 6 },
   cueKey: { width: 56, borderRadius: 8, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
-  transport: { flexDirection: 'row', height: 62, marginHorizontal: 14, gap: 7, marginTop: 8 },
-  transportGap: { width: 14 },
+  transport: { flexDirection: 'row', marginHorizontal: 14, gap: 10, marginTop: 8 },
+  housing: {
+    flexDirection: 'row',
+    gap: 3,
+    padding: 3,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.07)',
+    backgroundColor: 'rgba(255,255,255,0.035)',
+  },
 });

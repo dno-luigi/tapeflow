@@ -22,7 +22,7 @@ const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
 
 const HAIRLINE = 'rgba(255,255,255,0.10)';
 
-export function Knob({ label, icon, onPress, accessibilityLabel, size = 38 }) {
+export function Knob({ label, icon, onPress, accessibilityLabel, size = 38, active }) {
   const t = useTheme();
   return (
     <View style={st.unit}>
@@ -41,7 +41,7 @@ export function Knob({ label, icon, onPress, accessibilityLabel, size = 38 }) {
               <Stop offset="100%" stopColor="#0B0C0E" />
             </RadialGradient>
           </Defs>
-          <Circle cx="22" cy="22" r="21" fill="url(#knobFace)" stroke={HAIRLINE} strokeWidth="1" />
+          <Circle cx="22" cy="22" r="21" fill="url(#knobFace)" stroke={active ? t.danger : HAIRLINE} strokeWidth={active ? 1.4 : 1} />
           {/* The turned shoulder: one hairline inside the rim, as on a machined knob. */}
           <Circle cx="22" cy="22" r="15.5" fill="none" stroke="rgba(255,255,255,0.055)" strokeWidth="1" />
           {/* The pointer, printed on the top face rather than standing off it. */}
@@ -50,8 +50,8 @@ export function Knob({ label, icon, onPress, accessibilityLabel, size = 38 }) {
             y1="13.5"
             x2="22"
             y2="7.5"
-            stroke={t.text}
-            strokeOpacity="0.6"
+            stroke={active ? t.danger : t.text}
+            strokeOpacity={active ? 0.95 : 0.6}
             strokeWidth="1.6"
             strokeLinecap="round"
           />
@@ -63,7 +63,7 @@ export function Knob({ label, icon, onPress, accessibilityLabel, size = 38 }) {
           </View>
         ) : null}
       </Pressable>
-      <EngravedText size={8} color={t.textMuted} style={{ marginTop: 4 }}>
+      <EngravedText size={8} color={active ? t.text : t.textMuted} style={{ marginTop: 4 }}>
         {label}
       </EngravedText>
     </View>
@@ -74,7 +74,7 @@ export function Knob({ label, icon, onPress, accessibilityLabel, size = 38 }) {
  * A transport key. The caption sits UNDER the key, the way it is printed on the
  * case of the machine, so the row reads as hardware and not as a toolbar.
  */
-export function KeyCap({ icon, label, onPress, accessibilityLabel, active, tone = 'default', height = 50 }) {
+export function KeyCap({ icon, label, onPress, accessibilityLabel, active, tone = 'default', height = 46 }) {
   const t = useTheme();
   const record = tone === 'record';
   const face = record
@@ -158,10 +158,10 @@ export function LedLadder({ level = 0, rows = 10 }) {
       <View
         key={i}
         style={{
-          width: 8,
-          height: 3,
-          borderRadius: 1,
-          backgroundColor: on ? (hot ? t.danger : t.text) : 'rgba(255,255,255,0.10)',
+          width: 6,
+          height: 6,
+          borderRadius: 3,
+          backgroundColor: on ? (hot ? t.danger : t.text) : 'rgba(255,255,255,0.12)',
           opacity: on ? (hot ? 1 : 0.85) : 1,
         }}
       />
