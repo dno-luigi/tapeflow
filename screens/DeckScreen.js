@@ -23,7 +23,6 @@ import { takeAudioReady } from '../lib/audio/takeStore';
 import { ObsidianBackdrop, GlassPanel, GlassSpecular, glassStroke, glassFill } from '../ui/glass';
 import GlassReel from '../components/GlassReel';
 import Slider from '../components/Slider';
-import { shiftedUri } from '../lib/audio/keyShift';
 import { exportReel, canExport } from '../lib/audio/exportReel';
 import { rememberTakeAudio, hydrateTakeAudio } from '../lib/audio/takeStore';
 import { tapeTimeAt } from '../lib/audio/scrub';
@@ -58,6 +57,9 @@ const KEY_MIN = -12;
 const KEY_MAX = 12;
 const KEY_STEP = 0.05;
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+// The key and the tape's bend are the same thing: a semitone is a speed ratio.
+const semisToTrim = (s) => Math.pow(2, s / 12);
+const trimToSemis = (trim) => 12 * Math.log2(trim);
 
 const fmt = (s) => {
   const v = Math.max(0, s || 0);
@@ -159,9 +161,8 @@ export default function DeckScreen() {
   // How fast the tape runs when no hand is on the reel, and how far the take is
   // moved in key on top of that. `lock` decides whether a speed change keeps the
   // key (a speed changer) or bends it (a tape).
-  // `semis` is the key on the readout, `semisHeard` is the key the audio is at:
-  // a key change is rendered into the take, so the sound follows once the hand
-  // has settled instead of re-rendering on every pixel of a drag.
+  // `semis` is the key. A key change is a change of the tape's speed, so the
+  // readout and the sound move together and nothing has to be rendered.
   // Whether the device has been searched for each take's audio yet. Until it has,
   // a take is not "missing", it is simply not loaded.
   const [audioChecked, setAudioChecked] = useState(false);
@@ -170,7 +171,6 @@ export default function DeckScreen() {
   const [levelDrag, setLevelDrag] = useState(null);
   const [speed, setSpeed] = useState(1);
   const [semis, setSemis] = useState(0);
-  const [semisHeard, setSemisHeard] = useState(0);
   // PITCH LOCK is the default: the reel is a tempo control first, and the key only
   // rides the speed when the deck is told to behave like a tape.
   const [lock, setLock] = useState(true);
@@ -288,12 +288,11 @@ export default function DeckScreen() {
     // while it plays. The printed backing and the live one together is the music
     // twice over — the one failure mode a bounce has.
     const skip = supersedeSkip(tracks, p.mode === 'rec' ? p.recTracks : []);
-    const base = buildItems(tracks, skip).map((it) =>
-      // A key change plays a pitched copy of the take, rendered once; until that
-      // copy is ready the original keeps playing, so the tape never goes silent
-      // for it while it renders.
-      semisHeard ? { ...it, uri: shiftedUri(it.uri, semisHeard) || it.uri } : it
-    );
+    // A key change is the tape's own speed, so it is already in `rate` and needs
+    // nothing rendered: rendering a pitched copy of every take meant decoding a
+    // forty-minute pass and writing it back out, on the main thread, four times
+    // over — which froze the deck every time the key was touched.
+    const base = buildItems(tracks, skip);
     // A fader being dragged is heard as it moves, before it is written down.
     const items = applyLevelOverride(base, levelDrag ? levelDrag.index : null, levelDrag ? levelDrag.value : NaN);
     try {
@@ -899,7 +898,11 @@ export default function DeckScreen() {
     next = Math.round(next * 100) / 100;
     if (next === semisRef.current) return;
     semisRef.current = next;
+    // The key IS the tape's speed, the way a field recorder's varispeed is: the
+    // take bends in pitch at once and no copy of it is ever rendered.
+    trimRef.current = clamp(semisToTrim(next), PITCH_TRIM_MIN, PITCH_TRIM_MAX);
     setSemis(next);
+    setPitchUI(trimRef.current);
     Haptics.selectionAsync().catch(() => {});
   };
   const nudgeSpeed = (dir) => setSpeedValue(speedRef.current + dir * SPEED_STEP);
@@ -928,12 +931,6 @@ export default function DeckScreen() {
       repeat.current = setInterval(fn, 70);
     }, 300);
   };
-
-  // The audio follows the hand once it has stopped moving.
-  useEffect(() => {
-    const id = setTimeout(() => setSemisHeard(semis), 260);
-    return () => clearTimeout(id);
-  }, [semis]);
 
   // Dragging a pill: a swipe across the width of the deck covers the whole range,
   // which puts a single percent (or five cents) within a few pixels of the hand.
@@ -1187,7 +1184,14 @@ export default function DeckScreen() {
             max={PITCH_TRIM_MAX}
             format={(v) => (Math.round((v - 1) * 100) > 0 ? '+' : '') + Math.round((v - 1) * 100) + '%'}
             onChange={(v) => { trimRef.current = v; }}
-            onCommit={() => setPitchUI(trimRef.current)}
+            onCommit={() => {
+              // The slider and the key readout are two views of one bend.
+              setPitchUI(trimRef.current);
+              let s = clamp(Math.round(trimToSemis(trimRef.current) / KEY_STEP) * KEY_STEP, KEY_MIN, KEY_MAX);
+              s = Math.abs(s) < 0.03 ? 0 : Math.round(s * 100) / 100;
+              semisRef.current = s;
+              setSemis(s);
+            }}
           />
         </View>
 
