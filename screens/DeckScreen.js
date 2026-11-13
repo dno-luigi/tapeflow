@@ -18,7 +18,7 @@ import { Knob, KeyCap, LedLadder } from '../components/hardware';
 import TrackLevel from '../components/TrackLevel';
 import { pickAudioFile, canImportAudio } from '../lib/audio/importTake';
 import { micUnavailableReason, startMicTake, stopMicTake, micTakeLevel } from '../lib/audio/recordTake';
-import { startClick, stopClick, clampBpm, DEFAULT_BPM } from '../lib/audio/metronome';
+import { startClick, stopClick, clickRunning, beatSeconds, clampBpm, DEFAULT_BPM } from '../lib/audio/metronome';
 import { nextRecordBars, passEnd, reachedEnd } from '../lib/audio/bars';
 import { renderBounce } from '../lib/audio/bounce';
 import { takeAudioReady } from '../lib/audio/takeStore';
@@ -48,6 +48,8 @@ const MAXV = 1440; // 12x
 const PLAYABLE_X = 2;
 const SLOWEST_X = 0.5;
 const CAPACITY = 2400; // seconds of tape on the reel (40 minutes)
+// One bar of count-in before a pass, when the click is on: four beats to the bar.
+const COUNT_IN = 4;
 const MODES = { stop: 0, rec: NORMAL, rew: -MAXV, ff: MAXV };
 // Fine controls, not presets: the speed moves one percent at a time across the
 // reel's whole range and the key five cents at a time, and both can be dragged
@@ -455,7 +457,10 @@ export default function DeckScreen() {
   };
 
   const toMode = (m) => {
-    if (phys.mode === 'rec' && m !== 'rec') finishRef.current();
+    if (phys.mode === 'rec' && m !== 'rec') {
+      finishRef.current();
+      stopClick();
+    }
     phys.mode = m;
     setMode(m);
   };
@@ -479,14 +484,14 @@ export default function DeckScreen() {
     // eslint-disable-next-line
   }, []);
 
-  // The click track runs while a pass is being made with the TEMPO knob lit.
-  // It reads the transport's mode rather than the `recording` view of it, because
-  // that is worked out further down this component and a dependency array is read
-  // where the effect is written: naming it here ran before it existed.
+  // The click follows the tempo while the deck is rolling. It reads the transport's
+  // mode rather than the `recording` view of it, because that is worked out further
+  // down this component and a dependency array is read where the effect is written:
+  // naming it here ran before it existed.
+  // It does not stop the click itself: the count-in starts one before the pass does,
+  // and the transport stops it on the way out of record.
   useEffect(() => {
-    if (mode === 'rec' && tempoOn) startClick(bpm);
-    else stopClick();
-    return () => stopClick();
+    if (mode === 'rec' && tempoOn && !clickRunning()) startClick(bpm);
   }, [mode, tempoOn, bpm]);
 
   // The animation loop: the reel always turns at its own speed, and tape position follows it.
@@ -789,6 +794,16 @@ export default function DeckScreen() {
     }
     recBusy.current = true;
     try {
+      // A bar of count-in when the click is on, before the microphone opens: the
+      // clicks are not in the take, and the pass begins on the downbeat instead of
+      // wherever the key happened to land.
+      if (tempoOn) {
+        startClick(bpmRef.current, { lead: COUNT_IN });
+        flash('COUNT IN · ' + COUNT_IN);
+        await new Promise((resolve) => {
+          setTimeout(resolve, Math.round(beatSeconds(bpmRef.current) * COUNT_IN * 1000));
+        });
+      }
       if (Platform.OS === 'web') {
         // The browser path lives in lib/audio/recordTake so the reason a take
         // cannot start survives to the screen. expo-audio answers every web
@@ -824,6 +839,7 @@ export default function DeckScreen() {
     } catch (e) {
       // Say why it refused. "Could not start recording" alone leaves nothing to
       // act on, and on the web there is no console in front of most people.
+      stopClick();
       const why = String((e && e.message) || 'unknown error');
       flash((e && e.short) || 'COULD NOT START RECORDING');
       console.error('[deck] could not start recording', e);
