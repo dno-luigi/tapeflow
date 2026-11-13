@@ -22,12 +22,14 @@ const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
 
 const HAIRLINE = 'rgba(255,255,255,0.10)';
 
-export function Knob({ label, icon, onPress, accessibilityLabel, size = 38, active }) {
+export function Knob({ label, icon, onPress, onLongPress, delayLongPress, accessibilityLabel, size = 38, active }) {
   const t = useTheme();
   return (
     <View style={st.unit}>
       <Pressable
         onPress={onPress}
+        onLongPress={onLongPress}
+        delayLongPress={delayLongPress}
         accessibilityRole="button"
         accessibilityLabel={accessibilityLabel || label}
         hitSlop={8}

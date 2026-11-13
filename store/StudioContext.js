@@ -15,6 +15,9 @@ const DEFAULT_SETTINGS = {
   // pass has to stand on its own and wrong while the tracks are still being edited.
   bounce: false,
   masterTape: false,
+  // Record to the bar: 0 is off, otherwise a pass ends itself after this many
+  // bars and the region it made becomes the loop. Cycled from the TEMPO knob.
+  recordBars: 0,
   // How much speed a turn of the reel is worth. Larger is twitchier: at 0.8 a turn
   // and a quarter is 1x, and the deck's WHEEL stepper moves it from 0.1 to 4.
   wheelSens: 0.8,

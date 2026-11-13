@@ -19,6 +19,7 @@ import TrackLevel from '../components/TrackLevel';
 import { pickAudioFile, canImportAudio } from '../lib/audio/importTake';
 import { micUnavailableReason, startMicTake, stopMicTake, micTakeLevel } from '../lib/audio/recordTake';
 import { startClick, stopClick, clampBpm, DEFAULT_BPM } from '../lib/audio/metronome';
+import { nextRecordBars, passEnd, reachedEnd } from '../lib/audio/bars';
 import { renderBounce } from '../lib/audio/bounce';
 import { takeAudioReady } from '../lib/audio/takeStore';
 import { ObsidianBackdrop, GlassPanel, GlassSpecular, glassStroke, glassFill } from '../ui/glass';
@@ -116,6 +117,9 @@ export default function DeckScreen() {
   const studio = useStudio() || {};
   const sessions = studio.sessions || [];
   const settings = studio.settings || {};
+  // The animation loop is built once and must still see the current settings.
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
   const current = sessions.find((s) => s.id === studio.currentSessionId) || null;
   const tracks = [0, 1, 2, 3].map((i) => (current && current.tracks && current.tracks[i]) || { armed: false, takes: [] });
   const cues = (current && current.cues) || [];
@@ -202,6 +206,14 @@ export default function DeckScreen() {
     const next = !tempoOn;
     setTempoOn(next);
     flash(next ? 'TEMPO ' + bpm + ' BPM — ± SETS IT, CLICK ON RECORD' : 'TEMPO OFF · ' + bpm + ' BPM');
+  };
+  // Held, the TEMPO knob sets how long a pass is. A length turns the deck into
+  // the looper: the pass stops itself on the bar and plays back as the loop.
+  const cycleRecordBars = () => {
+    const next = nextRecordBars(settings.recordBars);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+    safe(() => studio.updateSettings && studio.updateSettings({ recordBars: next }));
+    flash(next ? 'REC LENGTH ' + next + ' BAR' + (next > 1 ? 'S' : '') : 'REC LENGTH OFF');
   };
   const [pitchMode, setPitchMode] = useState(2); // 2 is locked, the default
   const [cueMode, setCueMode] = useState(0);
@@ -507,6 +519,24 @@ export default function DeckScreen() {
         }
         p.angle = (p.angle + p.vel * dt) % 360;
         p.pos += (p.vel / normalRef.current) * dt;
+        // Record to the bar. A pass given a length ends itself when the bar comes
+        // round, and the region it just made becomes the loop — no hand on STOP,
+        // no points to set afterwards. This is the same finish the STOP key runs;
+        // it is called while the mode is still 'rec', as that finish expects.
+        if (p.mode === 'rec' && Number(settingsRef.current.recordBars) > 0) {
+          const end = passEnd(p.recStart, bpmRef.current, settingsRef.current.recordBars);
+          if (reachedEnd(p.pos, end)) {
+            p.pos = end.out;
+            p.vel = 0;
+            finishRef.current();
+            phys.mode = 'play';
+            setMode('play');
+            setLoopIn(end.in);
+            setLoopOut(end.out);
+            setLoopMode(2);
+            flash('LOOP ' + fmt(end.in) + ' → ' + fmt(end.out));
+          }
+        }
         // A loop is the tape running in a circle: at the OUT point the head is put
         // back at IN, and the mixer seeks because its position is the truth. The
         // rule itself lives in lib/audio/loop.js so it can be tested.
@@ -1154,7 +1184,8 @@ export default function DeckScreen() {
               <View style={[s.recLamp, { backgroundColor: recording ? t.danger : 'rgba(255,255,255,0.13)' }]} />
             </View>
             <EngravedText size={9} color={tempoOn ? t.accent : t.textMuted} numberOfLines={1} style={{ marginTop: 1 }}>
-              {(recording ? 'REC · ' : '') + ((current && current.name) || 'UNTITLED TAPE') + ' · ' + bpm + ' BPM'}
+              {(recording ? 'REC · ' : '') + ((current && current.name) || 'UNTITLED TAPE') + ' · ' + bpm + ' BPM'
+                + (Number(settings.recordBars) > 0 ? ' · ' + settings.recordBars + ' BAR' : '')}
             </EngravedText>
           </Pressable>
           {/* Two channels. The takes on the tape are mono, so both carry the same
@@ -1180,9 +1211,14 @@ export default function DeckScreen() {
             <Knob
               label="TEMPO"
               size={36}
-              active={tempoOn}
+              active={tempoOn || Number(settings.recordBars) > 0}
               onPress={cycleTempo}
-              accessibilityLabel={tempoOn ? 'Tempo: set the BPM with ±' : 'Tempo off'}
+              onLongPress={cycleRecordBars}
+              delayLongPress={400}
+              accessibilityLabel={
+                (tempoOn ? 'Tempo: set the BPM with ±' : 'Tempo off')
+                + (Number(settings.recordBars) > 0 ? ', record length ' + settings.recordBars + ' bars' : ', hold for record length')
+              }
             />
             <Knob
               label="TAKES"
