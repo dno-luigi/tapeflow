@@ -1374,6 +1374,10 @@ export default function DeckScreen() {
               <View style={{ position: 'absolute', left: px(recFrom), width: Math.max(2, px(hud.pos) - px(recFrom)), top: 0, bottom: 0, backgroundColor: t.accent }} />
             ) : null}
           </View>
+          {/* The IN point on its own, so setting it is something you can see. */}
+          {loopIn != null && loopOut == null ? (
+            <View pointerEvents="none" style={[s.loopIn, { left: px(loopIn) - 1, backgroundColor: t.warning }]} />
+          ) : null}
           {/* The loop, drawn on the tape where it sits. */}
           {loopIn != null && loopOut != null ? (
             <View
@@ -1409,10 +1413,19 @@ export default function DeckScreen() {
           </View>
         </View>
 
-        {/* Only while there is something to say: a permanent caption on the face
-            is one more thing crowding the machine. */}
+        {/* A message while there is something to say, and — with LOOP selected —
+            the points themselves, kept on screen. A hint that disappears after two
+            seconds leaves the loop looking like it did nothing. */}
         {legendMsg ? (
           <EngravedText size={10} color={t.accent} style={{ textAlign: 'center', marginTop: 2 }}>{legendMsg}</EngravedText>
+        ) : loopMode === 1 ? (
+          <EngravedText size={10} color={t.warning} style={{ textAlign: 'center', marginTop: 2 }}>
+            {'IN ' + (loopIn != null ? fmt(loopIn) : '—') + ' · OUT ' + (loopOut != null ? fmt(loopOut) : '—') + '   + SETS IN   − SETS OUT'}
+          </EngravedText>
+        ) : loopMode === 2 && loopIn != null && loopOut != null ? (
+          <EngravedText size={10} color={t.accent} style={{ textAlign: 'center', marginTop: 2 }}>
+            {'LOOP PLAYING ' + fmt(loopIn) + ' → ' + fmt(loopOut)}
+          </EngravedText>
         ) : null}
 
         {/* Arm row and cue */}
@@ -1560,6 +1573,7 @@ const s = StyleSheet.create({
   functionRow: { alignSelf: 'stretch', flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', marginTop: 4, paddingHorizontal: 8 },
   modeGroup: { flex: 1, flexDirection: 'row', justifyContent: 'space-around', paddingHorizontal: 4 },
   loopBar: { position: 'absolute', top: 10, height: 3, borderRadius: 2 },
+  loopIn: { position: 'absolute', top: 8, width: 2, height: 30, borderRadius: 1 },
   pill: { height: 32, paddingHorizontal: 4, borderRadius: 16, borderWidth: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
   pillStep: { width: 28, height: 28, alignItems: 'center', justifyContent: 'center' },
   pillValue: { minWidth: 62, height: 28, alignItems: 'center', justifyContent: 'center' },
