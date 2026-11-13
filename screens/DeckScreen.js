@@ -1266,6 +1266,9 @@ export default function DeckScreen() {
           {/* The mode keys and the one ± pair, as they sit below the disc on the
               machine. The pair belongs to whichever mode is selected. */}
           <View style={s.functionRow}>
+            {/* − and + sit at the two ends of the wheel, the three modes spread
+                between them: the pair belongs to the mode, not to the row. */}
+            <Knob label="−" size={34} onPress={() => modeStep(-1)} accessibilityLabel="Minus" />
             <View style={s.modeGroup}>
             <Knob
               label="CUE"
@@ -1289,10 +1292,7 @@ export default function DeckScreen() {
               accessibilityLabel={loopMode === 1 ? 'Loop: set the points' : loopMode === 2 ? 'Loop playing' : 'Loop off'}
             />
             </View>
-            <View style={s.plusGroup}>
-              <Knob label="−" size={34} onPress={() => modeStep(-1)} accessibilityLabel="Minus" />
-              <Knob label="+" size={34} onPress={() => modeStep(1)} accessibilityLabel="Plus" />
-            </View>
+            <Knob label="+" size={34} onPress={() => modeStep(1)} accessibilityLabel="Plus" />
           </View>
         </View>
 
@@ -1502,9 +1502,11 @@ const s = StyleSheet.create({
   wordmarkTitle: { fontSize: 15, lineHeight: 19, letterSpacing: 5, color: 'rgba(255,255,255,0.55)' },
   wheelArea: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   notch: { position: 'absolute', top: -6, width: 16, height: 14 },
-  functionRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', marginTop: 4, paddingHorizontal: 26 },
-  modeGroup: { flexDirection: 'row', gap: 26 },
-  plusGroup: { flexDirection: 'row', gap: 24 },
+  // alignSelf: the wheel area centres its children, and a centred row would shrink
+  // to its own width — the ± pair has to reach the edges of the wheel, not sit in
+  // the middle of the screen.
+  functionRow: { alignSelf: 'stretch', flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', marginTop: 4, paddingHorizontal: 8 },
+  modeGroup: { flex: 1, flexDirection: 'row', justifyContent: 'space-around', paddingHorizontal: 4 },
   loopBar: { position: 'absolute', top: 10, height: 3, borderRadius: 2 },
   pill: { height: 32, paddingHorizontal: 4, borderRadius: 16, borderWidth: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
   pillStep: { width: 28, height: 28, alignItems: 'center', justifyContent: 'center' },
