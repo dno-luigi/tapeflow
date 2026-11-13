@@ -176,6 +176,17 @@ export default function DeckScreen() {
   //   PITCH  off → adjusting (speed bends the key) → locked (speed keeps it)
   //   CUE    off → add
   //   LOOP   off → set the IN and OUT points → play the loop
+  // One track at a time, cycled from the TAPE boxes. Selecting a box arms that
+  // track and disarms the rest, which is the overdub flow a field recorder has;
+  // the face then carries one track's level instead of four cards.
+  const [selTrack, setSelTrack] = useState(0);
+  const selectTrack = (i) => {
+    const next = ((i % 4) + 4) % 4;
+    setSelTrack(next);
+    Haptics.selectionAsync().catch(() => {});
+    [0, 1, 2, 3].forEach((j) => safe(() => studio.updateTrack && studio.updateTrack(j, { armed: j === next })));
+    flash('TRACK 0' + (next + 1));
+  };
   const [pitchMode, setPitchMode] = useState(2); // 2 is locked, the default
   const [cueMode, setCueMode] = useState(0);
   const [loopMode, setLoopMode] = useState(0);
@@ -854,8 +865,8 @@ export default function DeckScreen() {
   // disc takes what is left, and its own box is measured rather than guessed, so
   // it can never push the captions off the bottom of the screen.
   const [wheelBox, setWheelBox] = useState(0);
-  const chrome = insets.top + insets.bottom + 58 + 52 + 24 + 46 + 56 + 64 + 70 + 14;
-  const size = Math.max(140, Math.min(W - 10, (wheelBox || H - chrome) - 74));
+  const chrome = insets.top + insets.bottom + 58 + 48 + 24 + 46 + 56 + 44 + 70 + 12;
+  const size = Math.max(140, Math.min(W - 6, (wheelBox || H - chrome) - 48));
   wheelSize.current = size;
 
   const span = (() => {
@@ -1133,9 +1144,9 @@ export default function DeckScreen() {
             {tracks.map((tr, i) => (
               <Pressable
                 key={i}
-                onPress={() => toggleArm(i)}
+                onPress={() => selectTrack(i)}
                 accessibilityRole="button"
-                accessibilityLabel={'Track ' + (i + 1) + (tr.armed ? ' armed' : ' not armed')}
+                accessibilityLabel={'Select track ' + (i + 1) + (tr.armed ? ', armed' : '')}
                 style={[s.tapeChip, tr.armed && { backgroundColor: t.accent, borderColor: t.accent }]}
               >
                 <Text style={[t.font.caption, { color: tr.armed ? t.onAccent : t.textMuted, fontSize: 9, lineHeight: 12 }]}>{'0' + (i + 1)}</Text>
@@ -1276,6 +1287,7 @@ export default function DeckScreen() {
         {/* Arm row and cue */}
         <View style={s.armRow}>
           {tracks.map((tr, i) => {
+            if (i !== selTrack) return null; // one track on the face; the TAPE boxes cycle
             const armed = !!tr.armed;
             const n = (tr.takes || []).length;
             const activeTake = (tr.takes || []).find((k) => k.id === tr.activeTakeId) || (tr.takes || [])[n - 1];
@@ -1387,7 +1399,7 @@ const s = StyleSheet.create({
     shadowOpacity: 0.85,
     shadowRadius: 8,
   },
-  knobRow: { height: 52, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-around', paddingHorizontal: 30 },
+  knobRow: { height: 48, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-around', paddingHorizontal: 30 },
   statusRow: { height: 24, flexDirection: 'row', alignItems: 'center', gap: 16, paddingHorizontal: 18 },
   meter: { alignItems: 'center', justifyContent: 'center', gap: 2 },
   tapeChips: { flexDirection: 'row', gap: 4 },
@@ -1400,8 +1412,10 @@ const s = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  wordmark: { alignItems: 'center', marginBottom: 2 },
-  wordmarkTitle: { fontSize: 17, lineHeight: 22, letterSpacing: 6, color: 'rgba(255,255,255,0.42)' },
+  // Printed on the disc's face, as it is on the machine, rather than stacked above
+  // it: the disc is the biggest thing on the screen and has room for its own name.
+  wordmark: { position: 'absolute', top: 44, left: 0, right: 0, alignItems: 'center', zIndex: 2 },
+  wordmarkTitle: { fontSize: 15, lineHeight: 19, letterSpacing: 5, color: 'rgba(255,255,255,0.55)' },
   wheelArea: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   notch: { position: 'absolute', top: -6, width: 16, height: 14 },
   functionRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 14, marginTop: 4, paddingHorizontal: 18 },
@@ -1415,7 +1429,7 @@ const s = StyleSheet.create({
   grip: { position: 'absolute', width: 12, height: 12, borderRadius: 6, borderWidth: 1.5, top: 19 },
   flag: { position: 'absolute', top: 2, width: 18, height: 16, borderRadius: 3, alignItems: 'center', justifyContent: 'center' },
   stripLabels: { position: 'absolute', left: 0, right: 0, bottom: 2, flexDirection: 'row', justifyContent: 'space-between' },
-  armRow: { height: 64, flexDirection: 'row', marginHorizontal: 12, marginTop: 4, gap: 5 },
+  armRow: { height: 44, flexDirection: 'row', marginHorizontal: 14, marginTop: 2, gap: 6 },
   arm: { flex: 1, borderRadius: 8, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   armKey: { flex: 1, alignSelf: 'stretch', alignItems: 'center', justifyContent: 'center' },
   trackLevel: { marginHorizontal: 6, marginBottom: 3 },
