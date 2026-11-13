@@ -18,6 +18,7 @@ import { Knob, KeyCap, LedLadder } from '../components/hardware';
 import TrackLevel from '../components/TrackLevel';
 import { pickAudioFile, canImportAudio } from '../lib/audio/importTake';
 import { micUnavailableReason, startMicTake, stopMicTake, micTakeLevel } from '../lib/audio/recordTake';
+import { startClick, stopClick, clampBpm, DEFAULT_BPM } from '../lib/audio/metronome';
 import { renderBounce } from '../lib/audio/bounce';
 import { takeAudioReady } from '../lib/audio/takeStore';
 import { ObsidianBackdrop, GlassPanel, GlassSpecular, glassStroke, glassFill } from '../ui/glass';
@@ -186,6 +187,21 @@ export default function DeckScreen() {
     Haptics.selectionAsync().catch(() => {});
     [0, 1, 2, 3].forEach((j) => safe(() => studio.updateTrack && studio.updateTrack(j, { armed: j === next })));
     flash('TRACK 0' + (next + 1));
+  };
+  // Tempo. The ± pair drives the BPM while the TEMPO knob is lit, and the click
+  // track follows the tempo while a pass is being recorded, so the number on the
+  // display is a tempo the deck is keeping rather than a decoration.
+  const [bpm, setBpm] = useState(DEFAULT_BPM);
+  // Two taps in a row land inside one render, and each would read the same BPM:
+  // the ref carries the value between them so a double tap moves two beats.
+  const bpmRef = useRef(DEFAULT_BPM);
+  bpmRef.current = bpm;
+  const [tempoOn, setTempoOn] = useState(false);
+  const cycleTempo = () => {
+    Haptics.selectionAsync().catch(() => {});
+    const next = !tempoOn;
+    setTempoOn(next);
+    flash(next ? 'TEMPO ' + bpm + ' BPM — ± SETS IT, CLICK ON RECORD' : 'TEMPO OFF · ' + bpm + ' BPM');
   };
   const [pitchMode, setPitchMode] = useState(2); // 2 is locked, the default
   const [cueMode, setCueMode] = useState(0);
@@ -446,9 +462,20 @@ export default function DeckScreen() {
       if (phys.mode === 'rec') safe(() => (Platform.OS === 'web' ? stopMicTake() : recorder.stop()));
       safe(() => stopRepeat());
       safe(() => mixerRef.current && mixerRef.current.dispose());
+      safe(() => stopClick());
     };
     // eslint-disable-next-line
   }, []);
+
+  // The click track runs while a pass is being made with the TEMPO knob lit.
+  // It reads the transport's mode rather than the `recording` view of it, because
+  // that is worked out further down this component and a dependency array is read
+  // where the effect is written: naming it here ran before it existed.
+  useEffect(() => {
+    if (mode === 'rec' && tempoOn) startClick(bpm);
+    else stopClick();
+    return () => stopClick();
+  }, [mode, tempoOn, bpm]);
 
   // The animation loop: the reel always turns at its own speed, and tape position follows it.
   useEffect(() => {
@@ -909,11 +936,27 @@ export default function DeckScreen() {
   // While a pass is being made the meter is the microphone's own peak. A meter
   // that moves while the input is silent is worse than no meter: it is the one
   // thing that would have said, plainly, that nothing was coming in.
+  // Under the head: how much audio the mix is really delivering. The meter used to
+  // be a sine wave plus a random number, which moved while the tape was silent —
+  // the one thing a meter must never do.
+  const mixLevel = (() => {
+    let sum = 0;
+    for (let i = 0; i < tracks.length; i += 1) {
+      const tr = tracks[i];
+      const takes = tr.takes || [];
+      if (!takes.length) continue;
+      const take = takes.find((k) => k.id === tr.activeTakeId) || takes[takes.length - 1];
+      if (!take) continue;
+      const from = Number(take.start) || 0;
+      const dur = Number(take.duration) || 0;
+      if (!(dur > 0) || hud.pos < from || hud.pos > from + dur) continue;
+      sum += (typeof tr.level === 'number' ? tr.level : 0.75) * 0.45;
+    }
+    return Math.min(1, sum);
+  })();
   const level = recording
     ? Math.max(0, Math.min(1, (hud.mic || 0) * 1.6))
-    : active
-      ? Math.min(1, 0.4 + 0.3 * Math.abs(Math.sin(hud.pos * 6.3)) + 0.15 * Math.random() + Math.min(0.2, speedX * 0.03))
-      : 0;
+    : moving ? mixLevel : 0;
   const spin = angleVal.interpolate({ inputRange: [-360, 360], outputRange: ['-360deg', '360deg'] });
   const px = (sec) => Math.max(0, Math.min(stripW, (sec / span) * stripW));
   // The strip's scrub handlers read these, and they change with the layout.
@@ -1030,6 +1073,15 @@ export default function DeckScreen() {
   // The ± pair. What it does is the selected mode's job; with no mode selected it
   // is the transport's speed, which is the one thing always worth a nudge.
   const modeStep = (dir) => {
+    if (tempoOn) {
+      const next = clampBpm(bpmRef.current + dir);
+      if (next === bpmRef.current) return;
+      bpmRef.current = next;
+      setBpm(next);
+      Haptics.selectionAsync().catch(() => {});
+      flash('TEMPO ' + next + ' BPM');
+      return;
+    }
     if (loopMode === 1) {
       if (dir > 0) {
         const at = hud.pos;
@@ -1085,44 +1137,68 @@ export default function DeckScreen() {
       {/* Obsidian glass ground: the deck is a slab, not a photograph. */}
       <ObsidianBackdrop />
       <View style={{ flex: 1, paddingTop: insets.top, paddingBottom: insets.bottom + 4 }}>
-        {/* Top bar: the counter is the face of the machine, so it leads. */}
+        {/* The display sits in the middle of the face, as it reads on the machine:
+            counter and tempo in the centre, the meters over on the right. */}
         <View style={s.top}>
+          <View style={s.topSide} />
           <Pressable
             onPress={() => nav.navigate('Sessions')}
             onLongPress={() => { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {}); setOffset(hud.pos); flash('COUNTER RESET'); }}
             delayLongPress={500}
             accessibilityRole="button"
             accessibilityLabel={'Tape counter ' + fmt(display) + '. Open sessions; hold to reset the counter.'}
-            style={s.topLeft}
+            style={s.topCenter}
           >
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
               <Text style={[t.font.title, s.timecode, { color: recording ? t.danger : t.text }]}>{fmt(display)}</Text>
               <View style={[s.recLamp, { backgroundColor: recording ? t.danger : 'rgba(255,255,255,0.13)' }]} />
             </View>
-            <EngravedText size={9} color={t.textMuted} numberOfLines={1} style={{ marginTop: 1 }}>
-              {(recording ? 'REC · ' : '') + ((current && current.name) || 'UNTITLED TAPE')}
+            <EngravedText size={9} color={tempoOn ? t.accent : t.textMuted} numberOfLines={1} style={{ marginTop: 1 }}>
+              {(recording ? 'REC · ' : '') + ((current && current.name) || 'UNTITLED TAPE') + ' · ' + bpm + ' BPM'}
             </EngravedText>
           </Pressable>
-          <View style={s.meter}>
-            <EngravedText size={7} color={t.textMuted}>{recording ? 'IN' : 'OUT'}</EngravedText>
-            <LedLadder level={level} rows={9} />
+          {/* Two channels. The takes on the tape are mono, so both carry the same
+              signal and both ladders read it; they part company the day a stereo
+              take reaches the mix. */}
+          <View style={s.topSideEnd}>
+            <View style={s.meter}>
+              <EngravedText size={7} color={t.textMuted}>{recording ? 'IN' : 'OUT'}</EngravedText>
+              <View style={s.meterPair}>
+                <LedLadder level={level} rows={9} />
+                <LedLadder level={level} rows={9} />
+              </View>
+              <EngravedText size={6} color={'rgba(255,255,255,0.3)'}>L  R</EngravedText>
+            </View>
           </View>
         </View>
 
         {/* The knobs: each one opens a part of the machine. */}
+        {/* The knobs, grouped the way they are on the case: the recording side on
+            the left, the pages on the right. */}
         <View style={s.knobRow}>
-          <Knob label="LIBRARY" size={36} onPress={() => nav.navigate('Sessions')} accessibilityLabel="Open the tape library" />
-          <Knob
-            label="TAKES"
-            size={36}
-            onPress={() => nav.navigate('Takes', { track: Math.max(0, tracks.findIndex((tr) => tr.armed)) })}
-            accessibilityLabel="Open the takes on the armed track"
-          />
-          {canImportAudio() ? (
-            <Knob label="IMPORT" size={36} onPress={onImport} accessibilityLabel="Import an audio file as a take" />
-          ) : null}
-          <Knob label="SAVE" size={36} onPress={onExport} accessibilityLabel="Save the reel as a WAV file" />
-          <Knob label="SETUP" size={36} onPress={() => nav.navigate('Back Panel')} accessibilityLabel="Flip to the back panel" />
+          <View style={s.knobGroup}>
+            <Knob
+              label="TEMPO"
+              size={36}
+              active={tempoOn}
+              onPress={cycleTempo}
+              accessibilityLabel={tempoOn ? 'Tempo: set the BPM with ±' : 'Tempo off'}
+            />
+            <Knob
+              label="TAKES"
+              size={36}
+              onPress={() => nav.navigate('Takes', { track: Math.max(0, tracks.findIndex((tr) => tr.armed)) })}
+              accessibilityLabel="Open the takes on the armed track"
+            />
+            {canImportAudio() ? (
+              <Knob label="IMPORT" size={36} onPress={onImport} accessibilityLabel="Import an audio file as a take" />
+            ) : null}
+            <Knob label="SAVE" size={36} onPress={onExport} accessibilityLabel="Save the reel as a WAV file" />
+          </View>
+          <View style={s.knobGroup}>
+            <Knob label="SETTINGS" size={36} onPress={() => nav.navigate('Back Panel')} accessibilityLabel="Flip to the back panel" />
+            <Knob label="LIBRARY" size={36} onPress={() => nav.navigate('Sessions')} accessibilityLabel="Open the tape library" />
+          </View>
         </View>
 
         {/* Mode indicators and the four track boxes, as printed on the panel. */}
@@ -1190,6 +1266,7 @@ export default function DeckScreen() {
           {/* The mode keys and the one ± pair, as they sit below the disc on the
               machine. The pair belongs to whichever mode is selected. */}
           <View style={s.functionRow}>
+            <View style={s.modeGroup}>
             <Knob
               label="CUE"
               size={34}
@@ -1211,9 +1288,11 @@ export default function DeckScreen() {
               onPress={cycleLoop}
               accessibilityLabel={loopMode === 1 ? 'Loop: set the points' : loopMode === 2 ? 'Loop playing' : 'Loop off'}
             />
-            <View style={{ flex: 1 }} />
-            <Knob label="−" size={34} onPress={() => modeStep(-1)} accessibilityLabel="Minus" />
-            <Knob label="+" size={34} onPress={() => modeStep(1)} accessibilityLabel="Plus" />
+            </View>
+            <View style={s.plusGroup}>
+              <Knob label="−" size={34} onPress={() => modeStep(-1)} accessibilityLabel="Minus" />
+              <Knob label="+" size={34} onPress={() => modeStep(1)} accessibilityLabel="Plus" />
+            </View>
           </View>
         </View>
 
@@ -1301,10 +1380,10 @@ export default function DeckScreen() {
                 style={[
                   s.arm,
                   {
-                    backgroundColor: armed ? t.accent : glassFill,
+                    backgroundColor: armed ? 'rgba(255,255,255,0.045)' : glassFill,
                     borderColor: armed ? t.accent : glassStroke,
                     shadowColor: t.accent,
-                    shadowOpacity: armed ? 0.8 : 0,
+                    shadowOpacity: 0,
                     shadowRadius: 10,
                     shadowOffset: { width: 0, height: 0 },
                   },
@@ -1321,8 +1400,8 @@ export default function DeckScreen() {
                   accessibilityLabel={'Track ' + (i + 1) + (armed ? ' armed' : ' not armed') + ', hold for takes'}
                   style={({ pressed }) => [s.armKey, { opacity: pressed ? 0.75 : 1 }]}
                 >
-                  <Text style={[t.font.label, { color: armed ? t.onAccent : t.textMuted, fontSize: 11, lineHeight: 14 }]}>{'TRK ' + (i + 1)}</Text>
-                  <Text style={[t.font.caption, { color: armed ? t.onAccent : t.textMuted, fontSize: 10, lineHeight: 13, opacity: 0.85 }]}>
+                  <Text style={[t.font.label, { color: armed ? t.text : t.textMuted, fontSize: 11, lineHeight: 14 }]}>{'TRK ' + (i + 1)}</Text>
+                  <Text style={[t.font.caption, { color: armed ? t.warning : t.textMuted, fontSize: 10, lineHeight: 13, opacity: 0.95 }]}>
                     {armed ? 'REC HERE' : silent ? 'SILENT' : noAudio ? 'NO AUDIO' : n > 0 ? (anyArmed ? 'PLAYS' : n === 1 ? '1 TAKE' : n + ' TAKES') : 'EMPTY'}
                   </Text>
                 </Pressable>
@@ -1386,7 +1465,10 @@ export default function DeckScreen() {
 }
 
 const s = StyleSheet.create({
-  top: { height: 58, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16 },
+  top: { height: 58, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12 },
+  topSide: { flex: 1 },
+  topSideEnd: { flex: 1, alignItems: 'flex-end' },
+  topCenter: { minHeight: 56, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6 },
   topLeft: { flex: 1, minHeight: 56, justifyContent: 'center', paddingRight: 10 },
   timecode: { fontSize: 34, lineHeight: 38, letterSpacing: 1.5, fontVariant: ['tabular-nums'] },
   recLamp: {
@@ -1399,9 +1481,11 @@ const s = StyleSheet.create({
     shadowOpacity: 0.85,
     shadowRadius: 8,
   },
-  knobRow: { height: 48, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-around', paddingHorizontal: 30 },
+  knobRow: { height: 48, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', paddingHorizontal: 16 },
+  knobGroup: { flexDirection: 'row', gap: 16 },
   statusRow: { height: 24, flexDirection: 'row', alignItems: 'center', gap: 16, paddingHorizontal: 18 },
-  meter: { alignItems: 'center', justifyContent: 'center', gap: 2 },
+  meter: { alignItems: 'center', justifyContent: 'center', gap: 1 },
+  meterPair: { flexDirection: 'row', alignItems: 'flex-end', gap: 3 },
   tapeChips: { flexDirection: 'row', gap: 4 },
   tapeChip: {
     width: 20,
@@ -1418,7 +1502,9 @@ const s = StyleSheet.create({
   wordmarkTitle: { fontSize: 15, lineHeight: 19, letterSpacing: 5, color: 'rgba(255,255,255,0.55)' },
   wheelArea: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   notch: { position: 'absolute', top: -6, width: 16, height: 14 },
-  functionRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 14, marginTop: 4, paddingHorizontal: 18 },
+  functionRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', marginTop: 4, paddingHorizontal: 26 },
+  modeGroup: { flexDirection: 'row', gap: 26 },
+  plusGroup: { flexDirection: 'row', gap: 24 },
   loopBar: { position: 'absolute', top: 10, height: 3, borderRadius: 2 },
   pill: { height: 32, paddingHorizontal: 4, borderRadius: 16, borderWidth: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
   pillStep: { width: 28, height: 28, alignItems: 'center', justifyContent: 'center' },
