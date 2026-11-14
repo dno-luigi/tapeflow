@@ -1287,7 +1287,7 @@ export default function DeckScreen() {
         <View style={s.wheelArea} onLayout={(e) => setWheelBox(e.nativeEvent.layout.height || 0)}>
           {/* Printed on the case over the disc, still while the spool turns. */}
           <View pointerEvents="none" style={s.wordmark}>
-            <Text style={[t.font.title, s.wordmarkTitle]}>TAPEFLOW</Text>
+            <Text style={[t.font.title, s.wordmarkTitle]}>TRNV</Text>
             <EngravedText size={8} color={t.textMuted}>4-TRACK DIGITAL TAPE RECORDER</EngravedText>
           </View>
           <View

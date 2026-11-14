@@ -123,7 +123,7 @@ export default function BackPanelScreen() {
       try { ok = await askNotificationPermission(); } catch (e) { ok = false; }
       if (!ok) {
         updateSettings && updateSettings({ reminderOn: false });
-        Alert.alert('Notifications are off for TapeFlow. Turn them on in Settings.');
+        Alert.alert('Notifications are off for TRNV. Turn them on in Settings.');
         return;
       }
     }

@@ -1,12 +1,17 @@
-# TapeFlow
+# TRNV
 
-A four-track field recorder built around a speed-adjusting wheel: the reel is the
-control surface, so playback speed, direction and scratching are the same
-gesture. Tracks carry modular tape effects (saturation, hiss, flutter per track
+TRNV (it reads "turn") is a four-track field recorder built around a
+speed-adjusting wheel: the reel is the control surface, so playback speed,
+direction and scratching are the same gesture. Tracks carry modular tape effects (saturation, hiss, flutter per track
 or as a master bus), and sessions can be bounced and shared across devices.
 
 The app is Expo / React Native and runs on iOS, Android and the web from one
 codebase.
+
+Design decisions, the detent spec, the accessibility contract and the roadmap
+live in [`docs/`](docs/) — read `decisions.md` first. The name changed from
+TapeFlow; the Worker, D1 database and storage keys deliberately did not, because
+they hold live data.
 
 ## History: WRON → GitHub → Cloudflare
 
@@ -38,6 +43,7 @@ lib/db.js              session rows with an offline write queue
 lib/reminders.js       local notification scheduling
 store/StudioContext.js studio state; AsyncStorage is the source of truth
 screens/, components/  the deck, wheel, DJ mode, back panel, sessions
+docs/                  decisions, design language, detents, accessibility, roadmap
 dist/                  build output (generated; not committed)
 ```
 
@@ -90,9 +96,10 @@ is answered by `worker/index.js`, everything else falls through to `ASSETS`, and
 | `CLOUDFLARE_API_TOKEN`  | My Profile → API Tokens → "Edit Cloudflare Workers" template |
 | `CLOUDFLARE_ACCOUNT_ID` | Workers & Pages → Account ID                                 |
 
-Optionally set the `TAPEFLOW_URL` repository variable (e.g.
-`https://tapeflow.example.workers.dev`); the workflow then smoke-tests
-`/api/health` after deploying.
+Optionally set the `TRNV_URL` repository variable (e.g.
+`https://tapeflow.example.workers.dev` — the Worker keeps its old name, since it
+is the live origin); the workflow then smoke-tests `/api/health` after deploying.
+The older `TAPEFLOW_URL` variable still works as a fallback.
 
 ## API
 

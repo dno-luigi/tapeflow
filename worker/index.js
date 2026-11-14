@@ -1,5 +1,5 @@
 /**
- * TapeFlow — Cloudflare Worker.
+ * TRNV — Cloudflare Worker.
  *
  * One Worker serves both halves of the app:
  *   /api/*   the account and session-sync API, backed by D1 (env.DB)
@@ -346,7 +346,7 @@ async function handleApi(request, env) {
   }
 
   if (pathname === '/api/health') {
-    return json({ ok: true, service: 'tapeflow', time: new Date().toISOString() });
+    return json({ ok: true, service: 'trnv', time: new Date().toISOString() });
   }
 
   if (pathname === '/api/auth/signup' && request.method === 'POST') return signUp(request, env);

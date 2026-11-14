@@ -1,4 +1,7 @@
--- TapeFlow D1 schema. Safe to run more than once.
+-- TRNV D1 schema. Safe to run more than once.
+--
+-- The database is still named `tapeflow` on purpose: it holds live data, and
+-- renaming it would mean a migration for no benefit (see docs/decisions.md #2).
 --
 -- Apply locally:  npx wrangler d1 execute tapeflow --local  --file=db/schema.sql
 -- Apply remotely: npx wrangler d1 execute tapeflow --remote --file=db/schema.sql

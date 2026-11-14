@@ -71,7 +71,7 @@ jobs:
               echo
               echo "1. Add repository secrets \`CLOUDFLARE_API_TOKEN\` and \`CLOUDFLARE_ACCOUNT_ID\` (Settings -> Secrets and variables -> Actions)."
               echo "2. Run \`npx wrangler d1 create tapeflow\` and replace \`REPLACE_WITH_D1_DATABASE_ID\` in \`wrangler.jsonc\` with the printed id."
-              echo "3. Optionally add a repository variable \`TAPEFLOW_URL\` so the deploy smoke-tests \`/api/health\`."
+              echo "3. Optionally add a repository variable \`TRNV_URL\` so the deploy smoke-tests \`/api/health\`."
               echo
               echo "See [README.md](../blob/main/README.md) for the full setup."
             } >> "$GITHUB_STEP_SUMMARY"
@@ -116,18 +116,20 @@ jobs:
       - name: Smoke test /api/health
         if: steps.cloudflare.outputs.ready == 'true'
         env:
-          TAPEFLOW_URL: ${{ vars.TAPEFLOW_URL }}
+          # TRNV_URL, falling back to the old TAPEFLOW_URL so an existing
+          # repository variable keeps working through the rename.
+          TRNV_URL: ${{ vars.TRNV_URL || vars.TAPEFLOW_URL }}
         run: |
-          if [ -z "${TAPEFLOW_URL}" ]; then
-            echo "vars.TAPEFLOW_URL is not set; skipping the smoke test."
+          if [ -z "${TRNV_URL}" ]; then
+            echo "vars.TRNV_URL is not set; skipping the smoke test."
             exit 0
           fi
           for attempt in 1 2 3 4 5; do
-            if curl -fsS "${TAPEFLOW_URL}/api/health" | grep -q '"ok":true'; then
+            if curl -fsS "${TRNV_URL}/api/health" | grep -q '"ok":true'; then
               echo "API is healthy."
               exit 0
             fi
             sleep 5
           done
-          echo "::error title=Deployed API is not healthy::${TAPEFLOW_URL}/api/health did not answer with ok:true after 5 attempts."
+          echo "::error title=Deployed API is not healthy::${TRNV_URL}/api/health did not answer with ok:true after 5 attempts."
           exit 1
