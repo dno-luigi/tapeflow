@@ -1538,11 +1538,15 @@ export default function DeckScreen() {
           </Pressable>
         </View>
 
-        {/* Transport: the three capture keys, then the two wind keys, captioned
-            underneath the way they are printed on the case. */}
+        {/* Transport: the two wind keys hold the ends of the row and the capture
+            keys sit between them, the way − and + hold the ends of the mode row.
+            A wind key on each side is the brand's arrangement, not a group of
+            keys pushed over to the right. */}
         <Animated.View style={[s.transport, { transform: [{ translateX: shake }] }]}>
-          {/* Two housings, as on the case: the capture keys, then the wind keys. */}
-          <View style={[s.housing, { flex: 3 }]}>
+          <View style={[s.housing, s.windHousing]}>
+            <KeyCap icon="play-back" label="REW" onPress={onRew} accessibilityLabel="Rewind" active={mode === 'rew'} />
+          </View>
+          <View style={[s.housing, { flex: 1 }]}>
             <KeyCap
               tone="record"
               label="REC"
@@ -1559,8 +1563,7 @@ export default function DeckScreen() {
             />
             <KeyCap icon="stop" label="STOP" onPress={onStop} accessibilityLabel="Stop, double tap for start of tape" />
           </View>
-          <View style={[s.housing, { flex: 2 }]}>
-            <KeyCap icon="play-back" label="REW" onPress={onRew} accessibilityLabel="Rewind" active={mode === 'rew'} />
+          <View style={[s.housing, s.windHousing]}>
             <KeyCap icon="play-forward" label="FF" onPress={onFF} accessibilityLabel="Fast forward" active={mode === 'ff'} />
           </View>
         </Animated.View>
@@ -1639,4 +1642,7 @@ const s = StyleSheet.create({
     borderColor: 'rgba(255,255,255,0.07)',
     backgroundColor: 'rgba(255,255,255,0.035)',
   },
+  // One key on its own, at the edge of the row, in the same housing as the three
+  // capture keys: a matched pair at opposite ends rather than a cluster.
+  windHousing: { width: 58, justifyContent: 'center' },
 });
