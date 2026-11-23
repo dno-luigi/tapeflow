@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "TapeFlow",
-    "slug": "tapeflow",
+    "name": "TRNV",
+    "slug": "trnv",
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
@@ -10,11 +10,11 @@
     },
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "app.tapeflow.recorder",
+      "bundleIdentifier": "app.trnv.recorder",
       "deploymentTarget": "16.4"
     },
     "android": {
-      "package": "app.tapeflow.recorder"
+      "package": "app.trnv.recorder"
     },
     "web": {
       "bundler": "metro",

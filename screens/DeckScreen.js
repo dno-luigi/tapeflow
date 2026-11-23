@@ -3,7 +3,7 @@ import { View, Pressable, Text, StatusBar, Alert, Animated, PanResponder, Platfo
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import Svg, { Line, Polygon } from 'react-native-svg';
+import Svg, { Line } from 'react-native-svg';
 import * as Haptics from 'expo-haptics';
 import { useAudioRecorder, RecordingPresets, AudioModule, setAudioModeAsync } from 'expo-audio';
 import { useTheme } from '../ui/theme';
@@ -14,19 +14,20 @@ import { createMixer, buildItems, supersedeSkip } from '../lib/audio/TapeMixer';
 import { applyLevelOverride } from '../lib/audio/mixPlan';
 import { wheelTransport, settleRates, DEG_PER_SEC_AT_1X, HAND_MIN, HAND_MAX } from '../lib/audio/wheel';
 import EngravedText from '../components/EngravedText';
-import VUMeter from '../components/VUMeter';
+import { Knob, KeyCap, LedLadder } from '../components/hardware';
 import TrackLevel from '../components/TrackLevel';
 import { pickAudioFile, canImportAudio } from '../lib/audio/importTake';
 import { micUnavailableReason, startMicTake, stopMicTake, micTakeLevel } from '../lib/audio/recordTake';
+import { startClick, stopClick, clickRunning, beatSeconds, clampBpm, DEFAULT_BPM } from '../lib/audio/metronome';
+import { nextRecordBars, passEnd, reachedEnd } from '../lib/audio/bars';
 import { renderBounce } from '../lib/audio/bounce';
 import { takeAudioReady } from '../lib/audio/takeStore';
 import { ObsidianBackdrop, GlassPanel, GlassSpecular, glassStroke, glassFill } from '../ui/glass';
 import GlassReel from '../components/GlassReel';
-import Slider from '../components/Slider';
-import { shiftedUri } from '../lib/audio/keyShift';
 import { exportReel, canExport } from '../lib/audio/exportReel';
 import { rememberTakeAudio, hydrateTakeAudio } from '../lib/audio/takeStore';
 import { tapeTimeAt } from '../lib/audio/scrub';
+import { loopJump } from '../lib/audio/loop';
 import { TAPE_SECONDS } from '../lib/audio/tape';
 
 // Wheel physics. One turn of the reel moves SEC_PER_REV seconds of tape at normal speed.
@@ -43,6 +44,8 @@ const MAXV = 1440; // 12x
 // The slowest speed the readout prints while the reel is turning: below it the
 // deck is holding still rather than playing slowly.
 const SLOWEST_X = 0.5;
+// One bar of count-in before a pass, when the click is on: four beats to the bar.
+const COUNT_IN = 4;
 const MODES = { stop: 0, rec: NORMAL, rew: -MAXV, ff: MAXV };
 // Fine controls, not presets: the speed moves one percent at a time across the
 // reel's whole range and the key five cents at a time, and both can be dragged
@@ -54,6 +57,9 @@ const KEY_MIN = -12;
 const KEY_MAX = 12;
 const KEY_STEP = 0.05;
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+// The key and the tape's bend are the same thing: a semitone is a speed ratio.
+const semisToTrim = (s) => Math.pow(2, s / 12);
+const trimToSemis = (trim) => 12 * Math.log2(trim);
 
 const fmt = (s) => {
   const v = Math.max(0, s || 0);
@@ -109,6 +115,9 @@ export default function DeckScreen() {
   const studio = useStudio() || {};
   const sessions = studio.sessions || [];
   const settings = studio.settings || {};
+  // The animation loop is built once and must still see the current settings.
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
   const current = sessions.find((s) => s.id === studio.currentSessionId) || null;
   const tracks = [0, 1, 2, 3].map((i) => (current && current.tracks && current.tracks[i]) || { armed: false, takes: [] });
   const cues = (current && current.cues) || [];
@@ -160,9 +169,8 @@ export default function DeckScreen() {
   // How fast the tape runs when no hand is on the reel, and how far the take is
   // moved in key on top of that. `lock` decides whether a speed change keeps the
   // key (a speed changer) or bends it (a tape).
-  // `semis` is the key on the readout, `semisHeard` is the key the audio is at:
-  // a key change is rendered into the take, so the sound follows once the hand
-  // has settled instead of re-rendering on every pixel of a drag.
+  // `semis` is the key. A key change is a change of the tape's speed, so the
+  // readout and the sound move together and nothing has to be rendered.
   // Whether the device has been searched for each take's audio yet. Until it has,
   // a take is not "missing", it is simply not loaded.
   const [audioChecked, setAudioChecked] = useState(false);
@@ -171,10 +179,55 @@ export default function DeckScreen() {
   const [levelDrag, setLevelDrag] = useState(null);
   const [speed, setSpeed] = useState(1);
   const [semis, setSemis] = useState(0);
-  const [semisHeard, setSemisHeard] = useState(0);
-  // PITCH LOCK is the default: the reel is a tempo control first, and the key only
-  // rides the speed when the deck is told to behave like a tape.
-  const [lock, setLock] = useState(true);
+  // Each mode key cycles through its own states, exactly as the machine's do, and
+  // the ± pair belongs to whichever mode is selected:
+  //   PITCH  off → adjusting (speed bends the key) → locked (speed keeps it)
+  //   CUE    off → add
+  //   LOOP   off → set the IN and OUT points → play the loop
+  // One track at a time, cycled from the TAPE boxes. Selecting a box arms that
+  // track and disarms the rest, which is the overdub flow a field recorder has;
+  // the face then carries one track's level instead of four cards.
+  const [selTrack, setSelTrack] = useState(0);
+  const selectTrack = (i) => {
+    const next = ((i % 4) + 4) % 4;
+    setSelTrack(next);
+    Haptics.selectionAsync().catch(() => {});
+    [0, 1, 2, 3].forEach((j) => safe(() => studio.updateTrack && studio.updateTrack(j, { armed: j === next })));
+    flash('TRACK 0' + (next + 1));
+  };
+  // Tempo. The ± pair drives the BPM while the TEMPO knob is lit, and the click
+  // track follows the tempo while a pass is being recorded, so the number on the
+  // display is a tempo the deck is keeping rather than a decoration.
+  const [bpm, setBpm] = useState(DEFAULT_BPM);
+  // Two taps in a row land inside one render, and each would read the same BPM:
+  // the ref carries the value between them so a double tap moves two beats.
+  const bpmRef = useRef(DEFAULT_BPM);
+  bpmRef.current = bpm;
+  const [tempoOn, setTempoOn] = useState(false);
+  const cycleTempo = () => {
+    Haptics.selectionAsync().catch(() => {});
+    const next = !tempoOn;
+    setTempoOn(next);
+    flash(next ? 'TEMPO ' + bpm + ' BPM — ± SETS IT, CLICK ON RECORD' : 'TEMPO OFF · ' + bpm + ' BPM');
+  };
+  // Held, the TEMPO knob sets how long a pass is. A length turns the deck into
+  // the looper: the pass stops itself on the bar and plays back as the loop.
+  const cycleRecordBars = () => {
+    const next = nextRecordBars(settings.recordBars);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+    safe(() => studio.updateSettings && studio.updateSettings({ recordBars: next }));
+    flash(next ? 'REC LENGTH ' + next + ' BAR' + (next > 1 ? 'S' : '') : 'REC LENGTH OFF');
+  };
+  const [pitchMode, setPitchMode] = useState(2); // 2 is locked, the default
+  const [cueMode, setCueMode] = useState(0);
+  const [loopMode, setLoopMode] = useState(0);
+  const [loopIn, setLoopIn] = useState(null);
+  const [loopOut, setLoopOut] = useState(null);
+  const lock = pitchMode === 2;
+  // The animation loop is created once, so it reads the loop from here rather than
+  // from a closure that would still be holding the points from the first render.
+  const loopRef = useRef({ mode: 0, in: null, out: null });
+  loopRef.current = { mode: loopMode, in: loopIn, out: loopOut };
   // The PITCH slider bends the tape's speed, so the key bends with it. 1 is no bend,
   // and it is a ref because the transport reads it every frame: putting it in state
   // re-rendered the whole deck dozens of times a second and froze it.
@@ -289,12 +342,11 @@ export default function DeckScreen() {
     // while it plays. The printed backing and the live one together is the music
     // twice over — the one failure mode a bounce has.
     const skip = supersedeSkip(tracks, p.mode === 'rec' ? p.recTracks : []);
-    const base = buildItems(tracks, skip).map((it) =>
-      // A key change plays a pitched copy of the take, rendered once; until that
-      // copy is ready the original keeps playing, so the tape never goes silent
-      // for it while it renders.
-      semisHeard ? { ...it, uri: shiftedUri(it.uri, semisHeard) || it.uri } : it
-    );
+    // A key change is the tape's own speed, so it is already in `rate` and needs
+    // nothing rendered: rendering a pitched copy of every take meant decoding a
+    // forty-minute pass and writing it back out, on the main thread, four times
+    // over — which froze the deck every time the key was touched.
+    const base = buildItems(tracks, skip);
     // A fader being dragged is heard as it moves, before it is written down.
     const items = applyLevelOverride(base, levelDrag ? levelDrag.index : null, levelDrag ? levelDrag.value : NaN);
     try {
@@ -424,7 +476,10 @@ export default function DeckScreen() {
   };
 
   const toMode = (m) => {
-    if (phys.mode === 'rec' && m !== 'rec') finishRef.current();
+    if (phys.mode === 'rec' && m !== 'rec') {
+      finishRef.current();
+      stopClick();
+    }
     phys.mode = m;
     setMode(m);
   };
@@ -443,9 +498,20 @@ export default function DeckScreen() {
       if (phys.mode === 'rec') safe(() => (Platform.OS === 'web' ? stopMicTake() : recorder.stop()));
       safe(() => stopRepeat());
       safe(() => mixerRef.current && mixerRef.current.dispose());
+      safe(() => stopClick());
     };
     // eslint-disable-next-line
   }, []);
+
+  // The click follows the tempo while the deck is rolling. It reads the transport's
+  // mode rather than the `recording` view of it, because that is worked out further
+  // down this component and a dependency array is read where the effect is written:
+  // naming it here ran before it existed.
+  // It does not stop the click itself: the count-in starts one before the pass does,
+  // and the transport stops it on the way out of record.
+  useEffect(() => {
+    if (mode === 'rec' && tempoOn && !clickRunning()) startClick(bpm);
+  }, [mode, tempoOn, bpm]);
 
   // The animation loop: the reel always turns at its own speed, and tape position follows it.
   useEffect(() => {
@@ -485,6 +551,31 @@ export default function DeckScreen() {
         }
         p.angle = (p.angle + p.vel * dt) % 360;
         p.pos += (p.vel / normalRef.current) * dt;
+        // Record to the bar. A pass given a length ends itself when the bar comes
+        // round, and the region it just made becomes the loop — no hand on STOP,
+        // no points to set afterwards. This is the same finish the STOP key runs;
+        // it is called while the mode is still 'rec', as that finish expects.
+        if (p.mode === 'rec' && Number(settingsRef.current.recordBars) > 0) {
+          const end = passEnd(p.recStart, bpmRef.current, settingsRef.current.recordBars);
+          if (reachedEnd(p.pos, end)) {
+            p.pos = end.out;
+            p.vel = 0;
+            finishRef.current();
+            phys.mode = 'play';
+            setMode('play');
+            setLoopIn(end.in);
+            setLoopOut(end.out);
+            setLoopMode(2);
+            flash('LOOP ' + fmt(end.in) + ' → ' + fmt(end.out));
+          }
+        }
+        // A loop is the tape running in a circle: at the OUT point the head is put
+        // back at IN, and the mixer seeks because its position is the truth. The
+        // rule itself lives in lib/audio/loop.js so it can be tested.
+        if (p.mode === 'play') {
+          const back = loopJump(p.pos, loopRef.current);
+          if (back != null) p.pos = back;
+        }
         if (p.pos <= 0) {
           p.pos = 0;
           if (p.vel < 0) p.vel = 0;
@@ -755,6 +846,16 @@ export default function DeckScreen() {
     }
     recBusy.current = true;
     try {
+      // A bar of count-in when the click is on, before the microphone opens: the
+      // clicks are not in the take, and the pass begins on the downbeat instead of
+      // wherever the key happened to land.
+      if (tempoOn) {
+        startClick(bpmRef.current, { lead: COUNT_IN });
+        flash('COUNT IN · ' + COUNT_IN);
+        await new Promise((resolve) => {
+          setTimeout(resolve, Math.round(beatSeconds(bpmRef.current) * COUNT_IN * 1000));
+        });
+      }
       if (Platform.OS === 'web') {
         // The browser path lives in lib/audio/recordTake so the reason a take
         // cannot start survives to the screen. expo-audio answers every web
@@ -790,6 +891,7 @@ export default function DeckScreen() {
     } catch (e) {
       // Say why it refused. "Could not start recording" alone leaves nothing to
       // act on, and on the web there is no console in front of most people.
+      stopClick();
       const why = String((e && e.message) || 'unknown error');
       flash((e && e.short) || 'COULD NOT START RECORDING');
       console.error('[deck] could not start recording', e);
@@ -900,10 +1002,16 @@ export default function DeckScreen() {
   }
 
   // Layout
-  // The now-playing line only exists on a radio reel, and the reel is sized to
-  // leave room for it rather than growing into it when the tape starts.
-  const chrome = insets.top + insets.bottom + 44 + 64 + (radio ? 40 : 0) + 40 + 64 + 86 + 64 + 28 + 64;
-  const size = Math.max(170, Math.min(W - 32, H - chrome));
+      // Every fixed band on the face, top to bottom: display panel, control knobs, the
+  // mode row, the mode keys with their captions, the sliders, the tape strip, the
+  // track keys and the transport. All of those are measured by the layout; the
+  // disc takes what is left, and its own box is measured rather than guessed, so
+  // it can never push the captions off the bottom of the screen.
+  // The disc's measured height. Named apart from `wheelBox`, which is the wheel's
+  // position on screen for reading a hand's angle.
+  const [discHeight, setDiscHeight] = useState(0);
+  const chrome = insets.top + insets.bottom + 58 + 48 + 24 + 46 + 56 + 44 + 70 + 12;
+  const size = Math.max(140, Math.min(W - 6, (discHeight || H - chrome) - 48));
   wheelSize.current = size;
 
   const span = (() => {
@@ -946,11 +1054,27 @@ export default function DeckScreen() {
   // While a pass is being made the meter is the microphone's own peak. A meter
   // that moves while the input is silent is worse than no meter: it is the one
   // thing that would have said, plainly, that nothing was coming in.
+  // Under the head: how much audio the mix is really delivering. The meter used to
+  // be a sine wave plus a random number, which moved while the tape was silent —
+  // the one thing a meter must never do.
+  const mixLevel = (() => {
+    let sum = 0;
+    for (let i = 0; i < tracks.length; i += 1) {
+      const tr = tracks[i];
+      const takes = tr.takes || [];
+      if (!takes.length) continue;
+      const take = takes.find((k) => k.id === tr.activeTakeId) || takes[takes.length - 1];
+      if (!take) continue;
+      const from = Number(take.start) || 0;
+      const dur = Number(take.duration) || 0;
+      if (!(dur > 0) || hud.pos < from || hud.pos > from + dur) continue;
+      sum += (typeof tr.level === 'number' ? tr.level : 0.75) * 0.45;
+    }
+    return Math.min(1, sum);
+  })();
   const level = recording
     ? Math.max(0, Math.min(1, (hud.mic || 0) * 1.6))
-    : active
-      ? Math.min(1, 0.4 + 0.3 * Math.abs(Math.sin(hud.pos * 6.3)) + 0.15 * Math.random() + Math.min(0.2, speedX * 0.03))
-      : 0;
+    : moving ? mixLevel : 0;
   const spin = angleVal.interpolate({ inputRange: [-360, 360], outputRange: ['-360deg', '360deg'] });
   const px = (sec) => Math.max(0, Math.min(stripW, (sec / span) * stripW));
   // The strip's scrub handlers read these, and they change with the layout.
@@ -971,7 +1095,11 @@ export default function DeckScreen() {
     next = Math.round(next * 100) / 100;
     if (next === semisRef.current) return;
     semisRef.current = next;
+    // The key IS the tape's speed, the way a field recorder's varispeed is: the
+    // take bends in pitch at once and no copy of it is ever rendered.
+    trimRef.current = clamp(semisToTrim(next), PITCH_TRIM_MIN, PITCH_TRIM_MAX);
     setSemis(next);
+    setPitchUI(trimRef.current);
     Haptics.selectionAsync().catch(() => {});
   };
   const nudgeSpeed = (dir) => setSpeedValue(speedRef.current + dir * SPEED_STEP);
@@ -1001,12 +1129,6 @@ export default function DeckScreen() {
     }, 300);
   };
 
-  // The audio follows the hand once it has stopped moving.
-  useEffect(() => {
-    const id = setTimeout(() => setSemisHeard(semis), 260);
-    return () => clearTimeout(id);
-  }, [semis]);
-
   // Dragging a pill: a swipe across the width of the deck covers the whole range,
   // which puts a single percent (or five cents) within a few pixels of the hand.
   const dragFrom = useRef({ speed: 1, key: 0 }).current;
@@ -1032,15 +1154,76 @@ export default function DeckScreen() {
     });
   const speedPanRef = useRef(null);
   if (!speedPanRef.current) speedPanRef.current = finePan('speed');
-  const speedPan = speedPanRef.current;
   const keyPanRef = useRef(null);
   if (!keyPanRef.current) keyPanRef.current = finePan('key');
-  const keyPan = keyPanRef.current;
-  const toggleLock = () => {
+  const cyclePitch = () => {
     Haptics.selectionAsync().catch(() => {});
-    const next = !lock;
-    setLock(next);
-    flash(next ? 'PITCH LOCK — SPEED KEEPS THE KEY' : 'TAPE PITCH — SPEED BENDS THE KEY');
+    const next = (pitchMode + 1) % 3;
+    setPitchMode(next);
+    if (next === 0) {
+      // Off means the tape at its own speed, and the key back where it was.
+      trimRef.current = 1;
+      semisRef.current = 0;
+      setPitchUI(1);
+      setSemis(0);
+      flash('PITCH OFF — 100%');
+    } else if (next === 1) {
+      flash('PITCH ADJUST — ± BENDS THE TAPE');
+    } else {
+      flash('PITCH LOCKED — SPEED KEEPS THE KEY');
+    }
+  };
+  const cycleCue = () => {
+    Haptics.selectionAsync().catch(() => {});
+    const next = cueMode === 1 ? 0 : 1;
+    setCueMode(next);
+    flash(next ? 'CUE — ± ADDS AND REMOVES' : 'CUE OFF');
+  };
+  const cycleLoop = () => {
+    Haptics.selectionAsync().catch(() => {});
+    const next = (loopMode + 1) % 3;
+    setLoopMode(next);
+    if (next === 0) flash(loopIn != null && loopOut != null ? 'LOOP OFF' : 'NO LOOP');
+    else if (next === 1) flash('LOOP — + SETS IN, − SETS OUT');
+    else if (loopIn != null && loopOut != null) flash('LOOP PLAY ' + fmt(loopIn) + ' → ' + fmt(loopOut));
+    else flash('SET AN IN AND AN OUT FIRST');
+  };
+  // The ± pair. What it does is the selected mode's job; with no mode selected it
+  // is the transport's speed, which is the one thing always worth a nudge.
+  const modeStep = (dir) => {
+    if (tempoOn) {
+      const next = clampBpm(bpmRef.current + dir);
+      if (next === bpmRef.current) return;
+      bpmRef.current = next;
+      setBpm(next);
+      Haptics.selectionAsync().catch(() => {});
+      flash('TEMPO ' + next + ' BPM');
+      return;
+    }
+    if (loopMode === 1) {
+      if (dir > 0) {
+        const at = hud.pos;
+        setLoopIn(at);
+        if (loopOut != null && loopOut <= at) setLoopOut(null);
+        flash('LOOP IN ' + fmt(at));
+      } else {
+        if (loopIn == null) { flash('SET THE IN POINT FIRST'); return; }
+        if (hud.pos <= loopIn) { flash('THE OUT POINT MUST FOLLOW THE IN'); return; }
+        setLoopOut(hud.pos);
+        flash('LOOP OUT ' + fmt(hud.pos));
+      }
+      return;
+    }
+    if (cueMode === 1) {
+      if (dir > 0) { dropCue(); return; }
+      const last = cues[cues.length - 1];
+      if (!last) { flash('NO CUE TO REMOVE'); return; }
+      safe(() => studio.removeCue && studio.removeCue(last.id));
+      flash('CUE REMOVED');
+      return;
+    }
+    if (pitchMode === 1) { nudgeKey(dir); return; }
+    nudgeSpeed(dir);
   };
   const onExport = async () => {
     if (mode === 'rec') { flash('STOP RECORDING FIRST'); return; }
@@ -1066,66 +1249,115 @@ export default function DeckScreen() {
     }
   };
 
-  const key = (icon, onPress, label, on) => (
-    <GlassPanel key={label} radius={12} style={[s.keyShell, { borderColor: on ? t.warning : glassStroke }]}>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={label}
-        onPress={onPress}
-        style={({ pressed }) => [s.keyInner, { opacity: pressed ? 0.6 : 1 }]}
-      >
-        <Ionicons name={icon} size={28} color={on ? t.warning : t.text} />
-        {on ? <View style={{ position: 'absolute', bottom: 7, width: 20, height: 2, borderRadius: 2, backgroundColor: t.warning }} /> : null}
-      </Pressable>
-    </GlassPanel>
-  );
-
   return (
     <View style={{ flex: 1, backgroundColor: t.bg }} {...swipe.panHandlers}>
       <StatusBar barStyle="light-content" translucent backgroundColor="transparent" />
       {/* Obsidian glass ground: the deck is a slab, not a photograph. */}
       <ObsidianBackdrop />
       <View style={{ flex: 1, paddingTop: insets.top, paddingBottom: insets.bottom + 4 }}>
-        {/* Top bar */}
+        {/* The display sits in the middle of the face, as it reads on the machine:
+            counter and tempo in the centre, the meters over on the right. */}
         <View style={s.top}>
-          <Pressable onPress={() => nav.navigate('Sessions')} accessibilityRole="button" accessibilityLabel="Open sessions" style={s.topLeft}>
-            <Ionicons name="albums-outline" size={20} color={t.warning} />
-            <EngravedText size={12} color={t.text} numberOfLines={1} style={{ marginLeft: 8, flexShrink: 1 }}>
-              {(current && current.name) || 'Reel'}
+          <View style={s.topSide} />
+          <Pressable
+            onPress={() => nav.navigate('Sessions')}
+            onLongPress={() => { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {}); setOffset(hud.pos); flash('COUNTER RESET'); }}
+            delayLongPress={500}
+            accessibilityRole="button"
+            accessibilityLabel={'Tape counter ' + fmt(display) + '. Open sessions; hold to reset the counter.'}
+            style={s.topCenter}
+          >
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <Text style={[t.font.title, s.timecode, { color: recording ? t.danger : t.text }]}>{fmt(display)}</Text>
+              <View style={[s.recLamp, { backgroundColor: recording ? t.danger : 'rgba(255,255,255,0.13)' }]} />
+            </View>
+            <EngravedText size={9} color={tempoOn ? t.accent : t.textMuted} numberOfLines={1} style={{ marginTop: 1 }}>
+              {(recording ? 'REC · ' : '') + ((current && current.name) || 'UNTITLED TAPE') + ' · ' + bpm + ' BPM'
+                + (Number(settings.recordBars) > 0 ? ' · ' + settings.recordBars + ' BAR' : '')}
             </EngravedText>
           </Pressable>
-          <Pressable onPress={() => nav.navigate('Radio')} accessibilityRole="button" accessibilityLabel="Tape radio, put a playlist on the reel" style={s.topBtn}>
-            <Ionicons name="radio-outline" size={22} color={t.accent} />
-          </Pressable>
-          {canImportAudio() ? (
-            <Pressable onPress={onImport} accessibilityRole="button" accessibilityLabel="Import an audio file as a take" style={s.topBtn}>
-              <Ionicons name="cloud-upload-outline" size={22} color={t.textMuted} />
-            </Pressable>
-          ) : null}
-          <Pressable onPress={onExport} accessibilityRole="button" accessibilityLabel="Save the reel as a WAV file" style={s.topBtn}>
-            <Ionicons name="download-outline" size={22} color={t.textMuted} />
-          </Pressable>
-          <Pressable onPress={() => nav.navigate('Back Panel')} accessibilityRole="button" accessibilityLabel="Flip to back panel" style={s.topBtn}>
-            <Ionicons name="settings-outline" size={22} color={t.textMuted} />
-          </Pressable>
+          {/* Two channels. The takes on the tape are mono, so both carry the same
+              signal and both ladders read it; they part company the day a stereo
+              take reaches the mix. */}
+          <View style={s.topSideEnd}>
+            <View style={s.meter}>
+              <EngravedText size={7} color={t.textMuted}>{recording ? 'IN' : 'OUT'}</EngravedText>
+              <View style={s.meterPair}>
+                <LedLadder level={level} rows={9} />
+                <LedLadder level={level} rows={9} />
+              </View>
+              <EngravedText size={6} color={'rgba(255,255,255,0.3)'}>L  R</EngravedText>
+            </View>
+          </View>
         </View>
 
-        {/* Counter and level */}
-        <View style={s.readout}>
-          <GlassPanel radius={10} style={[s.counter, { borderColor: recording ? t.accent : glassStroke }]}>
-            <Text style={[t.font.title, { color: recording ? t.accent : t.warning, fontSize: 30, lineHeight: 40, letterSpacing: 1 }]}>{fmt(display)}</Text>
-            <Pressable
-              accessibilityLabel="Reset tape counter, hold"
-              hitSlop={14}
-              onLongPress={() => { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {}); setOffset(hud.pos); flash('COUNTER RESET'); }}
-              style={[s.pinhole, { backgroundColor: glassStroke }]}
+        {/* The knobs: each one opens a part of the machine. */}
+        {/* The knobs, grouped the way they are on the case: the recording side on
+            the left, the pages on the right. */}
+        <View style={s.knobRow}>
+          <View style={s.knobGroup}>
+            <Knob
+              label="TEMPO"
+              size={36}
+              active={tempoOn || Number(settings.recordBars) > 0}
+              onPress={cycleTempo}
+              onLongPress={cycleRecordBars}
+              delayLongPress={400}
+              accessibilityLabel={
+                (tempoOn ? 'Tempo: set the BPM with ±' : 'Tempo off')
+                + (Number(settings.recordBars) > 0 ? ', record length ' + settings.recordBars + ' bars' : ', hold for record length')
+              }
             />
-          </GlassPanel>
-          <VUMeter width={112} height={56} level={level} label="IN" />
+            <Knob
+              label="TAKES"
+              size={36}
+              onPress={() => nav.navigate('Takes', { track: Math.max(0, tracks.findIndex((tr) => tr.armed)) })}
+              accessibilityLabel="Open the takes on the armed track"
+            />
+            {canImportAudio() ? (
+              <Knob label="IMPORT" size={36} onPress={onImport} accessibilityLabel="Import an audio file as a take" />
+            ) : null}
+            <Knob label="SAVE" size={36} onPress={onExport} accessibilityLabel="Save the reel as a WAV file" />
+          </View>
+          <View style={s.knobGroup}>
+            <Knob label="RADIO" size={36} active={radio} onPress={() => nav.navigate('Radio')} accessibilityLabel="Tape radio, put a playlist on the reel" />
+            <Knob label="SETTINGS" size={36} onPress={() => nav.navigate('Back Panel')} accessibilityLabel="Flip to the back panel" />
+            <Knob label="LIBRARY" size={36} onPress={() => nav.navigate('Sessions')} accessibilityLabel="Open the tape library" />
+          </View>
         </View>
 
-        {/* What the head is over, on a radio reel. Without it a playlist on the
-            tape plays song after song with nothing on the deck to name them. */}
+        {/* Mode indicators and the four track boxes, as printed on the panel. */}
+        <View style={s.statusRow}>
+          {/* The three modes, in the manual's colours: grey off, red adjusting,
+              white locked or playing. Each word is the key that cycles it. */}
+          <Pressable onPress={cycleCue} accessibilityRole="button" accessibilityLabel="Cue mode">
+            <EngravedText size={10} color={cueMode === 1 ? t.danger : cues.length > 0 ? t.text : 'rgba(255,255,255,0.32)'}>CUE</EngravedText>
+          </Pressable>
+          <Pressable onPress={cyclePitch} accessibilityRole="button" accessibilityLabel="Pitch mode">
+            <EngravedText size={10} color={pitchMode === 1 ? t.danger : pitchMode === 2 ? t.text : 'rgba(255,255,255,0.32)'}>PITCH</EngravedText>
+          </Pressable>
+          <Pressable onPress={cycleLoop} accessibilityRole="button" accessibilityLabel="Loop mode">
+            <EngravedText size={10} color={loopMode === 1 ? t.danger : loopMode === 2 ? t.text : 'rgba(255,255,255,0.32)'}>LOOP</EngravedText>
+          </Pressable>
+          <EngravedText size={9} color={'rgba(255,255,255,0.22)'} style={{ marginLeft: 2 }}>TAPE</EngravedText>
+          <View style={{ flex: 1 }} />
+          <View style={s.tapeChips}>
+            {tracks.map((tr, i) => (
+              <Pressable
+                key={i}
+                onPress={() => selectTrack(i)}
+                accessibilityRole="button"
+                accessibilityLabel={'Select track ' + (i + 1) + (tr.armed ? ', armed' : '')}
+                style={[s.tapeChip, tr.armed && { backgroundColor: t.accent, borderColor: t.accent }]}
+              >
+                <Text style={[t.font.caption, { color: tr.armed ? t.onAccent : t.textMuted, fontSize: 9, lineHeight: 12 }]}>{'0' + (i + 1)}</Text>
+              </Pressable>
+            ))}
+          </View>
+        </View>
+
+        {/* What the head is over, on a radio reel: every song sits on one track, so
+            nothing else on the face names the one that is playing. */}
         {radio ? (
           <View
             style={s.onAir}
@@ -1140,23 +1372,28 @@ export default function DeckScreen() {
             <View style={{ flex: 1, minWidth: 0 }}>
               {onAir ? (
                 <>
-                  <EngravedText size={12} color={moving ? t.accent : t.text} numberOfLines={1}>{onAir.title || 'Untitled track'}</EngravedText>
-                  <EngravedText size={10} color={t.textMuted} numberOfLines={1}>
+                  <EngravedText size={11} color={moving ? t.accent : t.text} numberOfLines={1}>{onAir.title || 'Untitled track'}</EngravedText>
+                  <EngravedText size={9} color={t.textMuted} numberOfLines={1}>
                     {(onAir.artist || 'Unknown artist') + (onAir.preview ? ' · PREVIEW' : '')}
                   </EngravedText>
                 </>
               ) : (
-                <EngravedText size={11} color={t.textMuted} numberOfLines={1}>BETWEEN SONGS · SPIN TO THE NEXT</EngravedText>
+                <EngravedText size={10} color={t.textMuted} numberOfLines={1}>BETWEEN SONGS · SPIN TO THE NEXT</EngravedText>
               )}
             </View>
             {onAir && onAir.n ? (
-              <EngravedText size={10} color={t.textMuted}>{onAir.n + '/' + radioSongs.length}</EngravedText>
+              <EngravedText size={9} color={t.textMuted}>{onAir.n + '/' + radioSongs.length}</EngravedText>
             ) : null}
           </View>
         ) : null}
 
-        {/* The one big reel */}
-        <View style={s.wheelArea}>
+        {/* The disc: the largest thing on the screen, because it is the instrument. */}
+        <View style={s.wheelArea} onLayout={(e) => setDiscHeight(e.nativeEvent.layout.height || 0)}>
+          {/* Printed on the case over the disc, still while the spool turns. */}
+          <View pointerEvents="none" style={s.wordmark}>
+            <Text style={[t.font.title, s.wordmarkTitle]}>TRNV</Text>
+            <EngravedText size={8} color={t.textMuted}>4-TRACK DIGITAL TAPE RECORDER</EngravedText>
+          </View>
           <View
             ref={wheelNode}
             onLayout={() => { wheelSize.current = size; measureWheel(); }}
@@ -1183,126 +1420,38 @@ export default function DeckScreen() {
                 style={{ position: 'absolute', left: size * 0.07, top: size * 0.07, width: size * 0.86, height: size * 0.86, borderRadius: size * 0.43 }}
               />
             </Animated.View>
-            <View pointerEvents="none" style={[s.notch, { left: size / 2 - 8 }]}>
-              <Svg width={16} height={14} viewBox="0 0 16 14">
-                <Polygon points="0,0 16,0 8,14" fill={recording ? t.accent : t.warning} />
-              </Svg>
+          </View>
+          {/* The mode keys and the one ± pair, as they sit below the disc on the
+              machine. The pair belongs to whichever mode is selected. */}
+          <View style={s.functionRow}>
+            {/* − and + sit at the two ends of the wheel, the three modes spread
+                between them: the pair belongs to the mode, not to the row. */}
+            <Knob label="−" size={34} onPress={() => modeStep(-1)} accessibilityLabel="Minus" />
+            <View style={s.modeGroup}>
+            <Knob
+              label="CUE"
+              size={34}
+              active={cueMode === 1}
+              onPress={cycleCue}
+              accessibilityLabel={cueMode === 1 ? 'Cue: add and remove with ±' : 'Cue off'}
+            />
+            <Knob
+              label="PITCH"
+              size={34}
+              active={pitchMode === 1}
+              onPress={cyclePitch}
+              accessibilityLabel={pitchMode === 1 ? 'Pitch adjusting' : pitchMode === 2 ? 'Pitch locked' : 'Pitch off'}
+            />
+            <Knob
+              label="LOOP"
+              size={34}
+              active={loopMode !== 0}
+              onPress={cycleLoop}
+              accessibilityLabel={loopMode === 1 ? 'Loop: set the points' : loopMode === 2 ? 'Loop playing' : 'Loop off'}
+            />
             </View>
+            <Knob label="+" size={34} onPress={() => modeStep(1)} accessibilityLabel="Plus" />
           </View>
-          <View style={s.pillRow}>
-            <GlassPanel radius={16} style={[s.pill, { borderColor: recording ? t.accent : glassStroke }]}>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Slower"
-                hitSlop={10}
-                onPress={() => nudgeSpeed(-1)}
-                onPressIn={() => startRepeat(() => nudgeSpeed(-1))}
-                onPressOut={stopRepeat}
-                style={s.pillStep}
-              >
-                <Ionicons name="remove" size={16} color={recording ? t.accent : t.warning} />
-              </Pressable>
-              <View
-                {...speedPan.panHandlers}
-                style={s.pillValue}
-                accessibilityLabel={'Speed ' + speedText + ', drag to fine tune'}
-              >
-                <EngravedText size={12} color={recording ? t.accent : t.warning}>
-                  {recording && !moving
-                    ? 'REC · 100%'
-                    : (mode === 'ff' || mode === 'rew') && !moving
-                      ? 'SPOOLING'
-                      : moving
-                        ? speedPct + '%'
-                        : speedText}
-                </EngravedText>
-              </View>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Faster"
-                hitSlop={10}
-                onPress={() => nudgeSpeed(1)}
-                onPressIn={() => startRepeat(() => nudgeSpeed(1))}
-                onPressOut={stopRepeat}
-                style={s.pillStep}
-              >
-                <Ionicons name="add" size={16} color={recording ? t.accent : t.warning} />
-              </Pressable>
-            </GlassPanel>
-
-            <GlassPanel radius={16} style={[s.pill, { borderColor: semis ? t.accent : glassStroke }]}>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Lower the key"
-                hitSlop={10}
-                onPress={() => nudgeKey(-1)}
-                onPressIn={() => startRepeat(() => nudgeKey(-1))}
-                onPressOut={stopRepeat}
-                style={s.pillStep}
-              >
-                <Ionicons name="remove" size={16} color={semis ? t.accent : t.warning} />
-              </Pressable>
-              <View
-                {...keyPan.panHandlers}
-                style={s.pillValue}
-                accessibilityLabel={'Key ' + keyText + ' semitones, drag to fine tune'}
-              >
-                <EngravedText size={12} color={semis ? t.accent : t.warning}>{'KEY ' + keyText}</EngravedText>
-              </View>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Raise the key"
-                hitSlop={10}
-                onPress={() => nudgeKey(1)}
-                onPressIn={() => startRepeat(() => nudgeKey(1))}
-                onPressOut={stopRepeat}
-                style={s.pillStep}
-              >
-                <Ionicons name="add" size={16} color={semis ? t.accent : t.warning} />
-              </Pressable>
-            </GlassPanel>
-
-            <Pressable
-              accessibilityRole="switch"
-              accessibilityState={{ checked: lock }}
-              accessibilityLabel={lock ? 'Pitch lock on: speed keeps the key' : 'Tape pitch: speed bends the key'}
-              onPress={toggleLock}
-            >
-              <GlassPanel radius={16} style={[s.pill, { borderColor: lock ? glassStroke : t.accent }]}>
-                <Ionicons name={lock ? 'lock-closed' : 'lock-open'} size={13} color={lock ? t.textMuted : t.accent} />
-                <EngravedText size={10} color={lock ? t.textMuted : t.accent} style={{ marginLeft: 5 }}>
-                  {lock ? 'PITCH LOCK' : 'TAPE PITCH'}
-                </EngravedText>
-              </GlassPanel>
-            </Pressable>
-          </View>
-        </View>
-
-        {/* Speed and pitch as sliders: the wheel is the dial, these are the numbers. */}
-        <View style={s.sliderRow}>
-          <Slider
-            label="SPEED"
-            value={speed}
-            min={0.5}
-            max={2}
-            format={(v) => Math.round(v * 100) + '%'}
-            onChange={(v) => { speedRef.current = v; }}
-            onCommit={(v) => {
-              const next = clamp(Math.round(v * 100) / 100, 0.5, 2);
-              speedRef.current = next;
-              setSpeed(next);
-            }}
-          />
-          <View style={{ width: 16 }} />
-          <Slider
-            label="PITCH"
-            value={pitchUI}
-            min={PITCH_TRIM_MIN}
-            max={PITCH_TRIM_MAX}
-            format={(v) => (Math.round((v - 1) * 100) > 0 ? '+' : '') + Math.round((v - 1) * 100) + '%'}
-            onChange={(v) => { trimRef.current = v; }}
-            onCommit={() => setPitchUI(trimRef.current)}
-          />
         </View>
 
         {/* Tape strip: the whole recording, drag the head to scrub, tap to jump */}
@@ -1331,6 +1480,24 @@ export default function DeckScreen() {
               <View style={{ position: 'absolute', left: px(recFrom), width: Math.max(2, px(hud.pos) - px(recFrom)), top: 0, bottom: 0, backgroundColor: t.accent }} />
             ) : null}
           </View>
+          {/* The IN point on its own, so setting it is something you can see. */}
+          {loopIn != null && loopOut == null ? (
+            <View pointerEvents="none" style={[s.loopIn, { left: px(loopIn) - 1, backgroundColor: t.warning }]} />
+          ) : null}
+          {/* The loop, drawn on the tape where it sits. */}
+          {loopIn != null && loopOut != null ? (
+            <View
+              pointerEvents="none"
+              style={[
+                s.loopBar,
+                {
+                  left: px(loopIn),
+                  width: Math.max(3, px(loopOut) - px(loopIn)),
+                  backgroundColor: loopMode === 2 ? t.accent : 'rgba(255,255,255,0.22)',
+                },
+              ]}
+            />
+          ) : null}
           <View pointerEvents="none" style={[s.playhead, { left: px(hud.pos) - 1, backgroundColor: recording ? t.accent : t.text }]} />
           {/* A grab handle on the head, so the bar reads as something you pull. */}
           <View pointerEvents="none" style={[s.grip, { left: px(hud.pos) - 6, borderColor: recording ? t.accent : t.warning, backgroundColor: t.bg }]} />
@@ -1352,11 +1519,25 @@ export default function DeckScreen() {
           </View>
         </View>
 
-        <EngravedText size={12} color={legendMsg ? t.accent : t.textMuted} style={{ textAlign: 'center', marginTop: 4 }}>{legend}</EngravedText>
+        {/* A message while there is something to say, and — with LOOP selected —
+            the points themselves, kept on screen. A hint that disappears after two
+            seconds leaves the loop looking like it did nothing. */}
+        {legendMsg ? (
+          <EngravedText size={10} color={t.accent} style={{ textAlign: 'center', marginTop: 2 }}>{legendMsg}</EngravedText>
+        ) : loopMode === 1 ? (
+          <EngravedText size={10} color={t.warning} style={{ textAlign: 'center', marginTop: 2 }}>
+            {'IN ' + (loopIn != null ? fmt(loopIn) : '—') + ' · OUT ' + (loopOut != null ? fmt(loopOut) : '—') + '   + SETS IN   − SETS OUT'}
+          </EngravedText>
+        ) : loopMode === 2 && loopIn != null && loopOut != null ? (
+          <EngravedText size={10} color={t.accent} style={{ textAlign: 'center', marginTop: 2 }}>
+            {'LOOP PLAYING ' + fmt(loopIn) + ' → ' + fmt(loopOut)}
+          </EngravedText>
+        ) : null}
 
         {/* Arm row and cue */}
         <View style={s.armRow}>
           {tracks.map((tr, i) => {
+            if (i !== selTrack) return null; // one track on the face; the TAPE boxes cycle
             const armed = !!tr.armed;
             const n = (tr.takes || []).length;
             const activeTake = (tr.takes || []).find((k) => k.id === tr.activeTakeId) || (tr.takes || [])[n - 1];
@@ -1374,10 +1555,10 @@ export default function DeckScreen() {
                 style={[
                   s.arm,
                   {
-                    backgroundColor: armed ? t.accent : glassFill,
+                    backgroundColor: armed ? 'rgba(255,255,255,0.045)' : glassFill,
                     borderColor: armed ? t.accent : glassStroke,
                     shadowColor: t.accent,
-                    shadowOpacity: armed ? 0.8 : 0,
+                    shadowOpacity: 0,
                     shadowRadius: 10,
                     shadowOffset: { width: 0, height: 0 },
                   },
@@ -1394,8 +1575,8 @@ export default function DeckScreen() {
                   accessibilityLabel={'Track ' + (i + 1) + (armed ? ' armed' : ' not armed') + ', hold for takes'}
                   style={({ pressed }) => [s.armKey, { opacity: pressed ? 0.75 : 1 }]}
                 >
-                  <Text style={[t.font.label, { color: armed ? t.onAccent : t.textMuted, fontSize: 13, lineHeight: 17 }]}>{'TRK ' + (i + 1)}</Text>
-                  <Text style={[t.font.caption, { color: armed ? t.onAccent : t.textMuted, fontSize: 10, lineHeight: 13, opacity: 0.85 }]}>
+                  <Text style={[t.font.label, { color: armed ? t.text : t.textMuted, fontSize: 11, lineHeight: 14 }]}>{'TRK ' + (i + 1)}</Text>
+                  <Text style={[t.font.caption, { color: armed ? t.warning : t.textMuted, fontSize: 10, lineHeight: 13, opacity: 0.95 }]}>
                     {armed ? 'REC HERE' : silent ? 'SILENT' : noAudio ? 'NO AUDIO' : songsOnIt > 0 ? songsOnIt + ' SONGS' : n > 0 ? (anyArmed ? 'PLAYS' : n === 1 ? '1 TAKE' : n + ' TAKES') : 'EMPTY'}
                   </Text>
                 </Pressable>
@@ -1427,45 +1608,31 @@ export default function DeckScreen() {
           </Pressable>
         </View>
 
-        {/* Transport */}
+        {/* Transport: the three capture keys, then the two wind keys, captioned
+            underneath the way they are printed on the case. */}
         <Animated.View style={[s.transport, { transform: [{ translateX: shake }] }]}>
-          {key('play-back', onRew, 'Rewind', mode === 'rew')}
-          {key(mode === 'play' ? 'pause' : 'play', onPlay, mode === 'play' ? 'Pause' : 'Play', mode === 'play')}
-          {key('stop', onStop, 'Stop, double tap for start of tape', false)}
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={recording ? 'Stop recording' : 'Record'}
-            onPress={onRecord}
-            style={({ pressed }) => [
-              s.key,
-              {
-                backgroundColor: recording || anyArmed ? t.accent : t.accentSoft,
-                borderColor: t.accent,
-                shadowColor: t.accent,
-                shadowOffset: { width: 0, height: 0 },
-                shadowOpacity: recording ? 1 : anyArmed ? 0.7 : 0,
-                shadowRadius: recording ? 18 : 12,
-                elevation: recording || anyArmed ? 10 : 0,
-                opacity: pressed ? 0.8 : 1,
-              },
-            ]}
-          >
-            {/* The record key is a lamp, not a picture of one. */}
-            <View
-              style={{
-                width: 18,
-                height: 18,
-                borderRadius: 9,
-                backgroundColor: recording ? '#FFFFFF' : t.onAccent,
-                opacity: recording || anyArmed ? 1 : 0.45,
-                shadowColor: t.accent,
-                shadowOpacity: recording ? 1 : 0.7,
-                shadowRadius: recording ? 14 : 8,
-                shadowOffset: { width: 0, height: 0 },
-              }}
+          {/* Two housings, as on the case: the capture keys, then the wind keys. */}
+          <View style={[s.housing, { flex: 3 }]}>
+            <KeyCap
+              tone="record"
+              label="REC"
+              onPress={onRecord}
+              accessibilityLabel={recording ? 'Stop recording' : 'Record'}
+              active={recording || anyArmed}
             />
-          </Pressable>
-          {key('play-forward', onFF, 'Fast forward', mode === 'ff')}
+            <KeyCap
+              icon={mode === 'play' ? 'pause' : 'play'}
+              label={mode === 'play' ? 'PAUSE' : 'PLAY'}
+              onPress={onPlay}
+              accessibilityLabel={mode === 'play' ? 'Pause' : 'Play'}
+              active={mode === 'play'}
+            />
+            <KeyCap icon="stop" label="STOP" onPress={onStop} accessibilityLabel="Stop, double tap for start of tape" />
+          </View>
+          <View style={[s.housing, { flex: 2 }]}>
+            <KeyCap icon="play-back" label="REW" onPress={onRew} accessibilityLabel="Rewind" active={mode === 'rew'} />
+            <KeyCap icon="play-forward" label="FF" onPress={onFF} accessibilityLabel="Fast forward" active={mode === 'ff'} />
+          </View>
         </Animated.View>
       </View>
     </View>
@@ -1473,34 +1640,74 @@ export default function DeckScreen() {
 }
 
 const s = StyleSheet.create({
-  top: { height: 44, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12 },
-  topLeft: { flex: 1, minHeight: 44, flexDirection: 'row', alignItems: 'center', paddingRight: 8 },
-  topBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
-  onAir: { height: 36, marginTop: 4, marginHorizontal: 20, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 8, borderWidth: 1, borderColor: glassStroke, backgroundColor: glassFill },
+  top: { height: 58, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12 },
+  topSide: { flex: 1 },
+  topSideEnd: { flex: 1, alignItems: 'flex-end' },
+  topCenter: { minHeight: 56, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6 },
+  topLeft: { flex: 1, minHeight: 56, justifyContent: 'center', paddingRight: 10 },
+  timecode: { fontSize: 34, lineHeight: 38, letterSpacing: 1.5, fontVariant: ['tabular-nums'] },
+  recLamp: {
+    width: 9,
+    height: 9,
+    borderRadius: 5,
+    marginLeft: 10,
+    shadowColor: '#FF3B1F',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.85,
+    shadowRadius: 8,
+  },
+  knobRow: { height: 48, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', paddingHorizontal: 16 },
+  knobGroup: { flexDirection: 'row', gap: 16 },
+  statusRow: { height: 24, flexDirection: 'row', alignItems: 'center', gap: 16, paddingHorizontal: 18 },
+  meter: { alignItems: 'center', justifyContent: 'center', gap: 1 },
+  meterPair: { flexDirection: 'row', alignItems: 'flex-end', gap: 3 },
+  tapeChips: { flexDirection: 'row', gap: 4 },
+  tapeChip: {
+    width: 20,
+    height: 14,
+    borderRadius: 2,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.16)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  // Printed on the disc's face, as it is on the machine, rather than stacked above
+  // it: the disc is the biggest thing on the screen and has room for its own name.
+  wordmark: { position: 'absolute', top: 44, left: 0, right: 0, alignItems: 'center', zIndex: 2 },
+  wordmarkTitle: { fontSize: 15, lineHeight: 19, letterSpacing: 5, color: 'rgba(255,255,255,0.55)' },
+  onAir: { height: 34, marginTop: 6, marginHorizontal: 18, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 8, borderWidth: 1, borderColor: glassStroke, backgroundColor: glassFill },
   onAirLamp: { width: 6, height: 6, borderRadius: 3 },
-  readout: { height: 64, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16 },
-  counter: { width: 168, height: 52, borderRadius: 6, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
-  pinhole: { position: 'absolute', right: 6, bottom: 6, width: 8, height: 8, borderRadius: 4 },
   wheelArea: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   notch: { position: 'absolute', top: -6, width: 16, height: 14 },
-  pillRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8, paddingHorizontal: 4 },
+  // alignSelf: the wheel area centres its children, and a centred row would shrink
+  // to its own width — the ± pair has to reach the edges of the wheel, not sit in
+  // the middle of the screen.
+  functionRow: { alignSelf: 'stretch', flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', marginTop: 4, paddingHorizontal: 8 },
+  modeGroup: { flex: 1, flexDirection: 'row', justifyContent: 'space-around', paddingHorizontal: 4 },
+  loopBar: { position: 'absolute', top: 10, height: 3, borderRadius: 2 },
+  loopIn: { position: 'absolute', top: 8, width: 2, height: 30, borderRadius: 1 },
   pill: { height: 32, paddingHorizontal: 4, borderRadius: 16, borderWidth: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
   pillStep: { width: 28, height: 28, alignItems: 'center', justifyContent: 'center' },
   pillValue: { minWidth: 62, height: 28, alignItems: 'center', justifyContent: 'center' },
-  sliderRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, marginTop: 10 },
-  strip: { height: 64, marginHorizontal: 20, justifyContent: 'center' },
+  strip: { height: 56, marginHorizontal: 20, justifyContent: 'center' },
   stripBar: { height: 14, borderRadius: 3, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden' },
-  playhead: { position: 'absolute', width: 2, height: 30, top: 14 },
-  grip: { position: 'absolute', width: 12, height: 12, borderRadius: 6, borderWidth: 1.5, top: 23 },
+  playhead: { position: 'absolute', width: 2, height: 26, top: 12 },
+  grip: { position: 'absolute', width: 12, height: 12, borderRadius: 6, borderWidth: 1.5, top: 19 },
   flag: { position: 'absolute', top: 2, width: 18, height: 16, borderRadius: 3, alignItems: 'center', justifyContent: 'center' },
   stripLabels: { position: 'absolute', left: 0, right: 0, bottom: 2, flexDirection: 'row', justifyContent: 'space-between' },
-  armRow: { height: 86, flexDirection: 'row', marginHorizontal: 12, marginTop: 6, gap: 6 },
+  armRow: { height: 44, flexDirection: 'row', marginHorizontal: 14, marginTop: 2, gap: 6 },
   arm: { flex: 1, borderRadius: 8, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   armKey: { flex: 1, alignSelf: 'stretch', alignItems: 'center', justifyContent: 'center' },
-  trackLevel: { marginHorizontal: 8, marginBottom: 6 },
-  cueKey: { width: 56, borderRadius: 8, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
-  transport: { flexDirection: 'row', height: 64, marginHorizontal: 12, gap: 6, marginTop: 8 },
-  key: { flex: 1, height: 64, borderRadius: 10, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
-  keyShell: { flex: 1, height: 64 },
-  keyInner: { height: 64, minWidth: 44, alignItems: 'center', justifyContent: 'center' },
+  trackLevel: { marginHorizontal: 6, marginBottom: 3 },
+  cueKey: { width: 46, borderRadius: 8, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  transport: { flexDirection: 'row', marginHorizontal: 14, gap: 10, marginTop: 8 },
+  housing: {
+    flexDirection: 'row',
+    gap: 3,
+    padding: 3,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.07)',
+    backgroundColor: 'rgba(255,255,255,0.035)',
+  },
 });
