@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { saveRecord, updateRecord, deleteRecord } from '../lib/db';
+import { TAPE_SECONDS } from '../lib/audio/tape';
 
 const STORAGE_KEY = 'studio:v1';
 
@@ -123,6 +124,7 @@ const StudioContext = createContext({
   renameSession: () => {},
   duplicateSession: () => null,
   deleteSession: () => {},
+  importRadio: () => null,
   setActiveTake: () => {},
   deleteTake: () => {},
   addTake: () => {},
@@ -285,6 +287,63 @@ export function StudioProvider({ children }) {
       });
       if (copy) scheduleSync(copy);
       return copy ? copy.id : null;
+    },
+    [scheduleSync]
+  );
+
+  // A playlist becomes a reel: its songs are laid end to end on one track, each
+  // starting where the last one ends, and marked `radio` so the mix offers all
+  // of them instead of only the track's active take. The wheel then plays, slows
+  // and scratches the whole playlist as one piece of tape.
+  const importRadio = useCallback(
+    (playlist) => {
+      const list = ((playlist && playlist.tracks) || []).filter((tr) => tr && tr.url);
+      if (!list.length) return null;
+      const takes = [];
+      const cues = [];
+      let cursor = 0;
+      for (let i = 0; i < list.length; i += 1) {
+        const tr = list[i];
+        const length = Math.max(2, Math.min(600, Number(tr.duration) || 30));
+        if (cursor + length > TAPE_SECONDS) break;
+        const start = Math.round(cursor * 10) / 10;
+        takes.push({
+          id: uid('r'),
+          n: i + 1,
+          duration: Math.round(length * 10) / 10,
+          start,
+          uri: tr.url,
+          peak: null,
+          title: String(tr.title || '').trim() || 'Track ' + (i + 1),
+          artist: String(tr.artist || '').trim() || null,
+          artwork: tr.artwork || null,
+          preview: !!tr.preview,
+          radio: true,
+          page: tr.page || null,
+          createdLabel: createdLabel(),
+        });
+        // A cue per song, so the timeline can jump to any of them.
+        cues.push({ id: uid('c'), position: start, label: i + 1 + '. ' + (tr.title || 'Track') });
+        cursor += length;
+      }
+      if (!takes.length) return null;
+      const title = String((playlist && playlist.title) || '').trim() || 'Radio reel';
+      const session = {
+        ...emptySession(title.slice(0, 60)),
+        duration: Math.round(cursor * 10) / 10,
+        tracks: [
+          { ...emptyTrack(), takes, activeTakeId: takes[0].id, level: 0.85 },
+          emptyTrack(),
+          emptyTrack(),
+          emptyTrack(),
+        ],
+        cues,
+      };
+      setSessions((prev) => [session, ...prev]);
+      setCurrentSessionId(session.id);
+      setTransportState(DEFAULT_TRANSPORT);
+      scheduleSync(session);
+      return session.id;
     },
     [scheduleSync]
   );
@@ -473,6 +532,7 @@ export function StudioProvider({ children }) {
       renameSession,
       duplicateSession,
       deleteSession,
+      importRadio,
       setActiveTake,
       deleteTake,
       addTake,
@@ -498,6 +558,7 @@ export function StudioProvider({ children }) {
       renameSession,
       duplicateSession,
       deleteSession,
+      importRadio,
       setActiveTake,
       deleteTake,
       addTake,

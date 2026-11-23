@@ -18,6 +18,7 @@ import DeckScreen from './screens/DeckScreen';
 import TakesScreen from './screens/TakesScreen';
 import BackPanelScreen from './screens/BackPanelScreen';
 import SessionsScreen from './screens/SessionsScreen';
+import RadioScreen from './screens/RadioScreen';
 
 // Before anything renders: a pull-down on the web must not reload the deck.
 lockPage();
@@ -41,6 +42,7 @@ function Root() {
       <RootStack.Screen name="Deck" component={guardScreen(DeckScreen, "Deck")} />
       <RootStack.Screen name="Back Panel" component={guardScreen(BackPanelScreen, "Back Panel")} />
       <RootStack.Screen name="Sessions" component={guardScreen(SessionsScreen, "Sessions")} />
+      <RootStack.Screen name="Radio" component={guardScreen(RadioScreen, "Radio")} />
       <RootStack.Screen name="Takes" component={guardScreen(TakesScreen, "Takes")} options={{ presentation: 'transparentModal', headerShown: false, cardStyle: { flex: 1, backgroundColor: 'transparent' }, cardOverlayEnabled: false }} />
       </RootStack.Navigator>
     </NavigationContainer>

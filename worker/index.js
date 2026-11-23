@@ -12,6 +12,7 @@
  */
 
 import { transcribeTake } from './transcribe.js';
+import { resolvePlaylist } from './radio.js';
 
 const JSON_HEADERS = {
   'content-type': 'application/json; charset=utf-8',
@@ -351,6 +352,14 @@ async function handleApi(request, env) {
 
   if (pathname === '/api/auth/signup' && request.method === 'POST') return signUp(request, env);
   if (pathname === '/api/auth/signin' && request.method === 'POST') return signIn(request, env);
+
+  // Radio import is public: it reads public playlist pages, not anyone's account.
+  if (pathname === '/api/radio/resolve' && request.method === 'POST') {
+    const body = await readJson(request);
+    if (!body) return fail(400, 'bad_request', 'Send a JSON body with a url.');
+    const out = await resolvePlaylist(body.url);
+    return json(out.body, out.status);
+  }
 
   // Everything below needs to know who is asking.
   const needsUser =

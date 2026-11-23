@@ -178,3 +178,41 @@ test('a track with no active take offers nothing, and null is not a take', () =>
   assert.deepEqual(buildItems([empty], []), []);
   assert.equal(resolveTakeUri(null), null);
 });
+
+test('a radio reel offers every song on the tape and skips the ones with no audio', () => {
+  // An imported playlist is one tape: each song is a take at its own start marked
+  // `radio`, and a song the import found no audio for keeps its place but has no
+  // URL. Only the active take of a plain track is normally heard, which would
+  // leave a radio reel silent past its first song — so every radio take has to be
+  // offered, and the ones with nothing to play have to be left off rather than
+  // handed to a player that would sit there sounding of nothing.
+  const song = (n, url, start) => ({
+    id: 'radio-' + n,
+    uri: url,
+    start,
+    duration: 30,
+    radio: true,
+  });
+  const tracks = [
+    {
+      activeTakeId: 'radio-1',
+      level: 0.9,
+      takes: [
+        song(1, 'https://cdn.test/1.mp3', 0),
+        song(2, null, 30),
+        song(3, 'https://cdn.test/3.mp3', 60),
+      ],
+    },
+    // A take left on another track that is not the one playing: a reel plays the
+    // songs laid on it, not whatever an earlier pass left lying around.
+    { activeTakeId: null, level: 0.75, takes: [{ id: 'old-1', uri: 'https://cdn.test/old.mp3', start: 0, duration: 5 }] },
+  ];
+
+  const items = buildItems(tracks, []);
+  assert.deepEqual(ids(items), ['radio-1', 'radio-3']);
+  // Each song keeps its own place on the tape, which is how the head knows which
+  // one it is over; a skipped song leaves its gap and does not pull the rest up.
+  assert.deepEqual(items.map((it) => it.start), [0, 60]);
+  assert.ok(items.every((it) => it.track === 0), 'the reel is one track');
+  assert.equal(items[0].volume, 0.9);
+});

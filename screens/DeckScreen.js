@@ -27,6 +27,7 @@ import { shiftedUri } from '../lib/audio/keyShift';
 import { exportReel, canExport } from '../lib/audio/exportReel';
 import { rememberTakeAudio, hydrateTakeAudio } from '../lib/audio/takeStore';
 import { tapeTimeAt } from '../lib/audio/scrub';
+import { TAPE_SECONDS } from '../lib/audio/tape';
 
 // Wheel physics. One turn of the reel moves SEC_PER_REV seconds of tape at normal speed.
 // The one-speed reference comes from the transport rule, so a hand turning at that
@@ -46,7 +47,6 @@ const MAXV = 1440; // 12x
 // sound goes, rather than smearing into mud.
 const PLAYABLE_X = 2;
 const SLOWEST_X = 0.5;
-const CAPACITY = 2400; // seconds of tape on the reel (40 minutes)
 const MODES = { stop: 0, rec: NORMAL, rew: -MAXV, ff: MAXV };
 // Fine controls, not presets: the speed moves one percent at a time across the
 // reel's whole range and the key five cents at a time, and both can be dragged
@@ -462,8 +462,8 @@ export default function DeckScreen() {
           p.pos = 0;
           if (p.vel < 0) p.vel = 0;
           if (p.mode === 'rew') { phys.mode = 'stop'; setMode('stop'); }
-        } else if (p.pos >= CAPACITY) {
-          p.pos = CAPACITY;
+        } else if (p.pos >= TAPE_SECONDS) {
+          p.pos = TAPE_SECONDS;
           if (p.vel > 0) p.vel = 0;
           if (p.mode === 'play' || p.mode === 'ff' || p.mode === 'rec') {
             if (p.mode === 'rec') finishRef.current();
@@ -490,6 +490,31 @@ export default function DeckScreen() {
 
   // Grabbing and turning the reel by hand.
   const wheelSize = useRef(300);
+  // Where the reel is on screen. A pointer's own `locationX` is measured against
+  // whichever layer it happens to be over, and the reel is a stack of glass and
+  // SVG pieces — so a turn read from it lurched and mostly cancelled itself out,
+  // which is exactly what a mouse on the web was doing. The wheel's own box is
+  // the one stable reference, for a finger and for a mouse alike.
+  const wheelNode = useRef(null);
+  const wheelBox = useRef({ left: 0, top: 0, size: 300 });
+  const measureWheel = () => {
+    const node = wheelNode.current;
+    if (!node || typeof node.measureInWindow !== 'function') return;
+    node.measureInWindow((x, y, w) => {
+      wheelBox.current = { left: x, top: y, size: w || wheelSize.current };
+    });
+  };
+  const reelAngleDeg = (e) => {
+    const n = (e && e.nativeEvent) || {};
+    const box = wheelBox.current;
+    const size = box.size || wheelSize.current || 300;
+    const hasPage = Number.isFinite(n.pageX) && Number.isFinite(n.pageY);
+    const x = hasPage ? n.pageX - box.left : Number(n.locationX);
+    const y = hasPage ? n.pageY - box.top : Number(n.locationY);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    const c = size / 2;
+    return (Math.atan2(y - c, x - c) * 180) / Math.PI;
+  };
   const wheel = useRef(PanResponder.create({
     // Capture on touch-down, not just on start. Without the capture phase the
     // deck's own swipe gesture could take the touch away mid-turn and the reel
@@ -500,9 +525,10 @@ export default function DeckScreen() {
     onMoveShouldSetPanResponder: () => true,
     onPanResponderTerminationRequest: () => false,
     onPanResponderGrant: (e) => {
-      const c = wheelSize.current / 2;
-      const { locationX, locationY } = e.nativeEvent;
-      phys.lastA = (Math.atan2(locationY - c, locationX - c) * 180) / Math.PI;
+      measureWheel();
+      const a0 = reelAngleDeg(e);
+      if (a0 === null) return;
+      phys.lastA = a0;
       phys.lastMoveT = Date.now();
       phys.hapticAcc = 0;
       phys.samples = [];
@@ -519,9 +545,8 @@ export default function DeckScreen() {
     },
     onPanResponderMove: (e) => {
       if (phys.locked) return;
-      const c = wheelSize.current / 2;
-      const { locationX, locationY } = e.nativeEvent;
-      const a = (Math.atan2(locationY - c, locationX - c) * 180) / Math.PI;
+      const a = reelAngleDeg(e);
+      if (a === null) return;
       let d = a - phys.lastA;
       if (d > 180) d -= 360;
       if (d < -180) d += 360;
@@ -561,7 +586,7 @@ export default function DeckScreen() {
         degPerSecAt1x: normalRef.current,
         ceiling: wheelCeiling,
       }).rate;
-      phys.pos = Math.max(0, Math.min(CAPACITY, phys.pos + rate * dt));
+      phys.pos = Math.max(0, Math.min(TAPE_SECONDS, phys.pos + rate * dt));
       phys.hapticAcc += Math.abs(d);
       if (phys.hapticAcc >= 30) {
         phys.hapticAcc = 0;
@@ -607,7 +632,7 @@ export default function DeckScreen() {
     // deck looks dead while it says it is playing.
     const t = tapeTimeAt(pageX, stripBox.current, stripMeta.current.span);
     if (t === null) return;
-    phys.pos = Math.max(0, Math.min(CAPACITY, t));
+    phys.pos = Math.max(0, Math.min(TAPE_SECONDS, t));
     // The hand owns the tape head while it is down: the animation loop leaves the
     // position alone and lets the speed fall away, so the finger is not fighting
     // the transport for it.
@@ -648,7 +673,7 @@ export default function DeckScreen() {
   const onPlay = () => {
     Haptics.selectionAsync().catch(() => {});
     if (mode === 'play') { toMode('stop'); return; }
-    if (phys.pos >= CAPACITY - 0.5) phys.pos = 0;
+    if (phys.pos >= TAPE_SECONDS - 0.5) phys.pos = 0;
     const heard = buildItems(tracks, []);
     if (heard.length === 0) flash('NOTHING RECORDED YET · ARM A TRACK AND REC');
     toMode('play');
@@ -697,7 +722,7 @@ export default function DeckScreen() {
       if (j !== target) safe(() => studio.updateTrack && studio.updateTrack(j, { armed: false }));
     });
     if (!tracks[target].armed) safe(() => studio.updateTrack && studio.updateTrack(target, { armed: true }));
-    if (phys.pos >= CAPACITY - 1) {
+    if (phys.pos >= TAPE_SECONDS - 1) {
       flash('TAPE IS FULL');
       return;
     }
@@ -762,7 +787,7 @@ export default function DeckScreen() {
       flash('STOP RECORDING FIRST');
       return;
     }
-    if (phys.pos >= CAPACITY - 1) {
+    if (phys.pos >= TAPE_SECONDS - 1) {
       flash('TAPE IS FULL');
       return;
     }
@@ -777,7 +802,7 @@ export default function DeckScreen() {
       Alert.alert('Could not read that file', (e && e.message) || 'Try another audio file.');
       return;
     }
-    const left = Math.max(0, CAPACITY - phys.pos);
+    const left = Math.max(0, TAPE_SECONDS - phys.pos);
     // One decimal, not whole seconds: a two-second imported take should stop
     // where the audio stops, not up to a second past it.
     const length = Math.min(Math.max(0.5, Math.round((picked.duration || 30) * 10) / 10), Math.max(0.5, Math.round(left * 10) / 10));
@@ -818,7 +843,7 @@ export default function DeckScreen() {
     if (mode === 'rec') { flash('STOP RECORDING TO JUMP'); return; }
     if (!Number.isFinite(time)) return;
     Haptics.selectionAsync().catch(() => {});
-    phys.pos = Math.max(0, Math.min(CAPACITY, time));
+    phys.pos = Math.max(0, Math.min(TAPE_SECONDS, time));
     setHud({ pos: phys.pos, vel: phys.vel });
   };
 
@@ -868,7 +893,7 @@ export default function DeckScreen() {
     || (recTarget >= 0
       ? 'REC TRK ' + (recTarget + 1) + (playAlong.length ? ' · PLAYING TRK ' + playAlong.join(' + ') : ' · FIRST PASS')
       : anyArmed
-        ? 'REMAINING ' + fmtRem(CAPACITY - hud.pos) + ' · ' + sr + ' kHz · 24-BIT PCM' + (settings.bounce ? ' · BOUNCE' : '')
+        ? 'REMAINING ' + fmtRem(TAPE_SECONDS - hud.pos) + ' · ' + sr + ' kHz · 24-BIT PCM' + (settings.bounce ? ' · BOUNCE' : '')
         : 'TAP A TRACK TO RECORD ONTO IT');
   const active = moving || recording;
   // While a pass is being made the meter is the microphone's own peak. A meter
@@ -1022,6 +1047,9 @@ export default function DeckScreen() {
               {(current && current.name) || 'Reel'}
             </EngravedText>
           </Pressable>
+          <Pressable onPress={() => nav.navigate('Radio')} accessibilityRole="button" accessibilityLabel="Tape radio, put a playlist on the reel" style={s.topBtn}>
+            <Ionicons name="radio-outline" size={22} color={t.accent} />
+          </Pressable>
           {canImportAudio() ? (
             <Pressable onPress={onImport} accessibilityRole="button" accessibilityLabel="Import an audio file as a take" style={s.topBtn}>
               <Ionicons name="cloud-upload-outline" size={22} color={t.textMuted} />
@@ -1052,6 +1080,8 @@ export default function DeckScreen() {
         {/* The one big reel */}
         <View style={s.wheelArea}>
           <View
+            ref={wheelNode}
+            onLayout={() => { wheelSize.current = size; measureWheel(); }}
             style={{ width: size, height: size }}
             {...wheel.panHandlers}
             accessibilityLabel="Tape reel. Drag around to scrub, fling to fast-forward or rewind."
@@ -1249,7 +1279,11 @@ export default function DeckScreen() {
             const silent = !!(activeTake && activeTake.peak === 0);
             // A take whose file this page cannot find is silence with a reason: say
             // so on the track instead of letting it claim to play.
-            const noAudio = !!(audioChecked && activeTake && !silent && !takeAudioReady(activeTake));
+            // A radio song is a remote URL, not a take stored on this device: it
+            // has no local copy to find and must not be reported as missing.
+            const remote = !!(activeTake && /^https?:/i.test(activeTake.uri || ''));
+            const noAudio = !!(audioChecked && activeTake && !silent && !remote && !takeAudioReady(activeTake));
+            const songsOnIt = (tr.takes || []).filter((k) => k && k.radio).length;
             return (
               <View
                 key={i}
@@ -1278,7 +1312,7 @@ export default function DeckScreen() {
                 >
                   <Text style={[t.font.label, { color: armed ? t.onAccent : t.textMuted, fontSize: 13, lineHeight: 17 }]}>{'TRK ' + (i + 1)}</Text>
                   <Text style={[t.font.caption, { color: armed ? t.onAccent : t.textMuted, fontSize: 10, lineHeight: 13, opacity: 0.85 }]}>
-                    {armed ? 'REC HERE' : silent ? 'SILENT' : noAudio ? 'NO AUDIO' : n > 0 ? (anyArmed ? 'PLAYS' : n === 1 ? '1 TAKE' : n + ' TAKES') : 'EMPTY'}
+                    {armed ? 'REC HERE' : silent ? 'SILENT' : noAudio ? 'NO AUDIO' : songsOnIt > 0 ? songsOnIt + ' SONGS' : n > 0 ? (anyArmed ? 'PLAYS' : n === 1 ? '1 TAKE' : n + ' TAKES') : 'EMPTY'}
                   </Text>
                 </Pressable>
                 {/* The track's level. The mix already used it; this sets it. */}
