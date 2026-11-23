@@ -7,12 +7,10 @@ import Svg, { Line } from 'react-native-svg';
 import * as Haptics from 'expo-haptics';
 import { useAudioRecorder, RecordingPresets, AudioModule, setAudioModeAsync } from 'expo-audio';
 import { useTheme } from '../ui/theme';
-import { AppImage } from '../ui/kit';
-import { ART } from '../constants/artwork';
 import { useStudio } from '../store/StudioContext';
 import { createMixer, buildItems, supersedeSkip } from '../lib/audio/TapeMixer';
 import { applyLevelOverride } from '../lib/audio/mixPlan';
-import { wheelTransport, settleRates, DEG_PER_SEC_AT_1X, HAND_MIN, HAND_MAX } from '../lib/audio/wheel';
+import { wheelTransport, settleRates, DEG_PER_SEC_AT_1X } from '../lib/audio/wheel';
 import EngravedText from '../components/EngravedText';
 import { Knob, KeyCap, LedLadder } from '../components/hardware';
 import TrackLevel from '../components/TrackLevel';
@@ -22,7 +20,7 @@ import { startClick, stopClick, clickRunning, beatSeconds, clampBpm, DEFAULT_BPM
 import { nextRecordBars, passEnd, reachedEnd } from '../lib/audio/bars';
 import { renderBounce } from '../lib/audio/bounce';
 import { takeAudioReady } from '../lib/audio/takeStore';
-import { ObsidianBackdrop, GlassPanel, GlassSpecular, glassStroke, glassFill } from '../ui/glass';
+import { ObsidianBackdrop, GlassSpecular, glassStroke, glassFill } from '../ui/glass';
 import GlassReel from '../components/GlassReel';
 import { exportReel, canExport } from '../lib/audio/exportReel';
 import { rememberTakeAudio, hydrateTakeAudio } from '../lib/audio/takeStore';
@@ -30,20 +28,15 @@ import { tapeTimeAt } from '../lib/audio/scrub';
 import { loopJump } from '../lib/audio/loop';
 import { TAPE_SECONDS } from '../lib/audio/tape';
 
-// Wheel physics. One turn of the reel moves SEC_PER_REV seconds of tape at normal speed.
-// The one-speed reference comes from the transport rule, so a hand turning at that
-// rate plays the tape at its own speed — the two must be the same number.
+// Wheel physics. One turn of the reel per second is the tape's own speed; the
+// deck's sensitivity scales it, so a hand turning at a song's pace plays at pace.
 const NORMAL = DEG_PER_SEC_AT_1X; // degrees per second at 1x play speed
 // The PITCH slider bends the tape's speed, so the key bends with it the way a tape
 // does: instant, and it works on a take of any length. The range is deliberately
 // gentle — half speed to double is an octave either way.
 const PITCH_TRIM_MIN = 0.5;
 const PITCH_TRIM_MAX = 2;
-const SEC_PER_REV = 360 / NORMAL;
 const MAXV = 1440; // 12x
-// The slowest speed the readout prints while the reel is turning: below it the
-// deck is holding still rather than playing slowly.
-const SLOWEST_X = 0.5;
 // One bar of count-in before a pass, when the click is on: four beats to the bar.
 const COUNT_IN = 4;
 const MODES = { stop: 0, rec: NORMAL, rew: -MAXV, ff: MAXV };
@@ -59,7 +52,6 @@ const KEY_STEP = 0.05;
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 // The key and the tape's bend are the same thing: a semitone is a speed ratio.
 const semisToTrim = (s) => Math.pow(2, s / 12);
-const trimToSemis = (trim) => 12 * Math.log2(trim);
 
 const fmt = (s) => {
   const v = Math.max(0, s || 0);
@@ -232,7 +224,6 @@ export default function DeckScreen() {
   // and it is a ref because the transport reads it every frame: putting it in state
   // re-rendered the whole deck dozens of times a second and froze it.
   const trimRef = useRef(1);
-  const [pitchUI, setPitchUI] = useState(1);
   // What the wheel's turn does. With the key held it is the tempo; with the key free
   // it is the pitch, and a turn moves through the key instead of through the tape.
 
@@ -496,7 +487,6 @@ export default function DeckScreen() {
   useEffect(() => {
     return () => {
       if (phys.mode === 'rec') safe(() => (Platform.OS === 'web' ? stopMicTake() : recorder.stop()));
-      safe(() => stopRepeat());
       safe(() => mixerRef.current && mixerRef.current.dispose());
       safe(() => stopClick());
     };
@@ -1025,18 +1015,7 @@ export default function DeckScreen() {
   const anyArmed = tracks.some((tr) => tr.armed);
   const recording = mode === 'rec';
   const display = Math.max(0, hud.pos - offset);
-  const speedX = Math.abs(hud.vel) / normalRef.current;
   const moving = Math.abs(hud.vel) >= 1;
-  // What is being heard, not only what is set: a hand can turn the reel far slower
-  // or faster than the speed control, and the readout should follow the hand. The
-  // control's own range is 50–200%; a hand may go to 2% or 400%.
-  const shownSpeed = Math.min(HAND_MAX, Math.max(moving ? HAND_MIN : SLOWEST_X, speedX));
-  const speedPct = Math.round(shownSpeed * 100);
-  // While the tape is running the reel is the truth, so the readout follows the
-  // hand; stopped, it shows the speed the deck is set to. Both are shown at the
-  // resolution they are set at — a percent and five cents.
-  const speedText = (Math.round(speed * 1000) % 10 === 0 ? String(Math.round(speed * 100)) : (speed * 100).toFixed(1)) + '%';
-  const keyText = (semis > 0 ? '+' : semis < 0 ? '−' : '') + Math.abs(semis).toFixed(2);
   // While a pass is being made, say out loud what is being written and what is
   // playing along: layering is invisible otherwise, and "nothing is playing"
   // with no explanation is the failure that makes a recorder feel broken.
@@ -1099,63 +1078,11 @@ export default function DeckScreen() {
     // take bends in pitch at once and no copy of it is ever rendered.
     trimRef.current = clamp(semisToTrim(next), PITCH_TRIM_MIN, PITCH_TRIM_MAX);
     setSemis(next);
-    setPitchUI(trimRef.current);
     Haptics.selectionAsync().catch(() => {});
   };
   const nudgeSpeed = (dir) => setSpeedValue(speedRef.current + dir * SPEED_STEP);
   const nudgeKey = (dir) => setKeyValue(semisRef.current + dir * KEY_STEP);
 
-  // A tap is one step and a hold is a stream of them. The step on a tap comes
-  // from onPress, on release, and the repeat waits before it starts — otherwise
-  // a tap would take a step on the way down and a hold would take one too many.
-  const repeat = useRef(null);
-  const repeatDelay = useRef(null);
-  const stopRepeat = () => {
-    if (repeatDelay.current) {
-      clearTimeout(repeatDelay.current);
-      repeatDelay.current = null;
-    }
-    if (repeat.current) {
-      clearInterval(repeat.current);
-      repeat.current = null;
-    }
-  };
-  const startRepeat = (fn) => {
-    stopRepeat();
-    repeatDelay.current = setTimeout(() => {
-      repeatDelay.current = null;
-      fn();
-      repeat.current = setInterval(fn, 70);
-    }, 300);
-  };
-
-  // Dragging a pill: a swipe across the width of the deck covers the whole range,
-  // which puts a single percent (or five cents) within a few pixels of the hand.
-  const dragFrom = useRef({ speed: 1, key: 0 }).current;
-  const finePan = (kind) =>
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: () => true,
-      onPanResponderTerminationRequest: () => false,
-      onPanResponderGrant: () => {
-        dragFrom[kind] = kind === 'speed' ? speedRef.current : semisRef.current;
-        stopRepeat();
-      },
-      onPanResponderMove: (e, g) => {
-        // Deliberately slow to move: a swipe only reaches about a screen, so a
-        // percent has to be several pixels and five cents a fine one. Speed
-        // covers its range in a deck and a half, the key in two and a half.
-        const across = kind === 'speed' ? Math.max(240, W * 1.8) : Math.max(320, W * 2.6);
-        const spread = kind === 'speed' ? SPEED_MAX - SPEED_MIN : KEY_MAX - KEY_MIN;
-        const next = dragFrom[kind] + (g.dx / across) * spread;
-        if (kind === 'speed') setSpeedValue(next);
-        else setKeyValue(next);
-      },
-    });
-  const speedPanRef = useRef(null);
-  if (!speedPanRef.current) speedPanRef.current = finePan('speed');
-  const keyPanRef = useRef(null);
-  if (!keyPanRef.current) keyPanRef.current = finePan('key');
   const cyclePitch = () => {
     Haptics.selectionAsync().catch(() => {});
     const next = (pitchMode + 1) % 3;
@@ -1164,7 +1091,6 @@ export default function DeckScreen() {
       // Off means the tape at its own speed, and the key back where it was.
       trimRef.current = 1;
       semisRef.current = 0;
-      setPitchUI(1);
       setSemis(0);
       flash('PITCH OFF — 100%');
     } else if (next === 1) {
@@ -1644,7 +1570,7 @@ const s = StyleSheet.create({
   topSide: { flex: 1 },
   topSideEnd: { flex: 1, alignItems: 'flex-end' },
   topCenter: { minHeight: 56, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6 },
-  topLeft: { flex: 1, minHeight: 56, justifyContent: 'center', paddingRight: 10 },
+
   timecode: { fontSize: 34, lineHeight: 38, letterSpacing: 1.5, fontVariant: ['tabular-nums'] },
   recLamp: {
     width: 9,
@@ -1678,7 +1604,7 @@ const s = StyleSheet.create({
   onAir: { height: 34, marginTop: 6, marginHorizontal: 18, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 8, borderWidth: 1, borderColor: glassStroke, backgroundColor: glassFill },
   onAirLamp: { width: 6, height: 6, borderRadius: 3 },
   wheelArea: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  notch: { position: 'absolute', top: -6, width: 16, height: 14 },
+
   // alignSelf: the wheel area centres its children, and a centred row would shrink
   // to its own width — the ± pair has to reach the edges of the wheel, not sit in
   // the middle of the screen.
@@ -1686,9 +1612,7 @@ const s = StyleSheet.create({
   modeGroup: { flex: 1, flexDirection: 'row', justifyContent: 'space-around', paddingHorizontal: 4 },
   loopBar: { position: 'absolute', top: 10, height: 3, borderRadius: 2 },
   loopIn: { position: 'absolute', top: 8, width: 2, height: 30, borderRadius: 1 },
-  pill: { height: 32, paddingHorizontal: 4, borderRadius: 16, borderWidth: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
-  pillStep: { width: 28, height: 28, alignItems: 'center', justifyContent: 'center' },
-  pillValue: { minWidth: 62, height: 28, alignItems: 'center', justifyContent: 'center' },
+
   strip: { height: 56, marginHorizontal: 20, justifyContent: 'center' },
   stripBar: { height: 14, borderRadius: 3, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden' },
   playhead: { position: 'absolute', width: 2, height: 26, top: 12 },
