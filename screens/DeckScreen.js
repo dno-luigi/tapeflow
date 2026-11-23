@@ -3,7 +3,6 @@ import { View, Pressable, Text, StatusBar, Alert, Animated, PanResponder, Platfo
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import Svg, { Line } from 'react-native-svg';
 import * as Haptics from 'expo-haptics';
 import { useAudioRecorder, RecordingPresets, AudioModule, setAudioModeAsync } from 'expo-audio';
 import { useTheme } from '../ui/theme';
@@ -21,7 +20,7 @@ import { nextRecordBars, passEnd, reachedEnd } from '../lib/audio/bars';
 import { renderBounce } from '../lib/audio/bounce';
 import { takeAudioReady } from '../lib/audio/takeStore';
 import { ObsidianBackdrop, GlassSpecular, glassStroke, glassFill } from '../ui/glass';
-import GlassReel from '../components/GlassReel';
+import WheelDisc from '../components/WheelDisc';
 import { exportReel, canExport } from '../lib/audio/exportReel';
 import { rememberTakeAudio, hydrateTakeAudio } from '../lib/audio/takeStore';
 import { tapeTimeAt } from '../lib/audio/scrub';
@@ -71,33 +70,6 @@ const fmtShort = (s) => {
 const safe = (fn) => { try { return fn(); } catch (e) { return undefined; } };
 // Takes are named by the caller so their audio can be filed under the same name.
 const newTakeId = () => 't' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-
-// A ring of grip marks around the reel, turning with it.
-function Bezel({ size, color, accent }) {
-  const marks = [];
-  for (let i = 0; i < 72; i += 1) {
-    const a = ((i * 5) * Math.PI) / 180;
-    const major = i % 6 === 0;
-    const r1 = major ? 44.5 : 46;
-    const r2 = 48.6;
-    marks.push(
-      <Line
-        key={i}
-        x1={50 + r1 * Math.sin(a)}
-        y1={50 - r1 * Math.cos(a)}
-        x2={50 + r2 * Math.sin(a)}
-        y2={50 - r2 * Math.cos(a)}
-        stroke={i === 0 ? accent : color}
-        strokeWidth={major ? 0.9 : 0.5}
-      />
-    );
-  }
-  return (
-    <Svg width={size} height={size} viewBox="0 0 100 100" style={StyleSheet.absoluteFill}>
-      {marks}
-    </Svg>
-  );
-}
 
 export default function DeckScreen() {
   const t = useTheme();
@@ -187,20 +159,26 @@ export default function DeckScreen() {
     [0, 1, 2, 3].forEach((j) => safe(() => studio.updateTrack && studio.updateTrack(j, { armed: j === next })));
     flash('TRACK 0' + (next + 1));
   };
-  // Tempo. The ± pair drives the BPM while the TEMPO knob is lit, and the click
-  // track follows the tempo while a pass is being recorded, so the number on the
-  // display is a tempo the deck is keeping rather than a decoration.
+  // Tempo. The ± pair drives the BPM while the TEMPO knob is lit. The number is
+  // the tape's speed as well as the click's: 96 BPM is the deck's own pace, and
+  // the click keeps that same beat while a pass is being recorded.
   const [bpm, setBpm] = useState(DEFAULT_BPM);
   // Two taps in a row land inside one render, and each would read the same BPM:
   // the ref carries the value between them so a double tap moves two beats.
   const bpmRef = useRef(DEFAULT_BPM);
   bpmRef.current = bpm;
   const [tempoOn, setTempoOn] = useState(false);
+  // A tempo is a speed. 120 BPM turns the tape at 120/96 of its own pace, so the
+  // music really changes tempo — and with the key held it does it without bending
+  // the pitch. It is read from refs because the transport asks every frame.
+  const tempoOnRef = useRef(false);
+  tempoOnRef.current = tempoOn;
+  const tempoRateNow = () => (tempoOnRef.current ? clampBpm(bpmRef.current) / DEFAULT_BPM : 1);
   const cycleTempo = () => {
     Haptics.selectionAsync().catch(() => {});
     const next = !tempoOn;
     setTempoOn(next);
-    flash(next ? 'TEMPO ' + bpm + ' BPM — ± SETS IT, CLICK ON RECORD' : 'TEMPO OFF · ' + bpm + ' BPM');
+    flash(next ? 'TEMPO ' + bpm + ' BPM — ± SETS IT, TAPE FOLLOWS' : 'TEMPO OFF · TAPE AT 100%');
   };
   // Held, the TEMPO knob sets how long a pass is. A length turns the deck into
   // the looper: the pass stops itself on the bar and plays back as the loop.
@@ -325,9 +303,12 @@ export default function DeckScreen() {
     const bent = Math.abs(trim - 1) > 0.001;
     const transport = p.mode === 'play' || p.mode === 'rec';
     const going = t.playing;
+    // Playback follows the tempo; a pass keeps real time, so the bars it is cut
+    // on are the bars the click counted.
+    const tempoRate = p.mode === 'play' ? tempoRateNow() : 1;
     const rate =
       !t.hand && transport
-        ? Math.max(0.0625, Math.min(8, speedRef.current * trim))
+        ? Math.max(0.0625, Math.min(8, speedRef.current * trim * tempoRate))
         : t.rate;
     // A bounced take carries the tracks it printed, so those tracks are left out
     // while it plays. The printed backing and the live one together is the music
@@ -530,7 +511,7 @@ export default function DeckScreen() {
         } else {
           const target =
             p.mode === 'play'
-              ? normalRef.current * speedRef.current * trimRef.current
+              ? normalRef.current * speedRef.current * trimRef.current * tempoRateNow()
               : MODES[p.mode] || 0;
           // Speeding up is quicker than slowing down (the hand has already asked
           // for it), and how long the let-go glides is the SETTLE setting: letting
@@ -1123,7 +1104,7 @@ export default function DeckScreen() {
       bpmRef.current = next;
       setBpm(next);
       Haptics.selectionAsync().catch(() => {});
-      flash('TEMPO ' + next + ' BPM');
+      flash('TEMPO ' + next + ' BPM · TAPE ' + Math.round((next / DEFAULT_BPM) * 100) + '%');
       return;
     }
     if (loopMode === 1) {
@@ -1165,7 +1146,7 @@ export default function DeckScreen() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
     flash('RENDERING ' + Math.round(speed * 100) + '%' + (semis ? ' · KEY ' + (semis > 0 ? '+' : '') + semis : '') + ' …');
     try {
-      const out = await exportReel({ items, name: (current && current.name) || 'reel', speed, semitones: semis, pitchLock: lock });
+      const out = await exportReel({ items, name: (current && current.name) || 'reel', speed: speed * tempoRateNow(), semitones: semis, pitchLock: lock });
       flash('SAVED · ' + out.filename);
     } catch (e) {
       flash('COULD NOT SAVE THE FILE');
@@ -1313,39 +1294,62 @@ export default function DeckScreen() {
           </View>
         ) : null}
 
+        {/* Printed on the case above the disc, still while the wheel turns. It sits
+            in the panel rather than on the metal: a wordmark across a machined
+            face fights the light, and the pointer needs the rim to itself. */}
+        <View pointerEvents="none" style={s.wordmark}>
+          <Text style={[t.font.title, s.wordmarkTitle]}>TRNV</Text>
+          <EngravedText size={8} color={t.textMuted}>4-TRACK DIGITAL TAPE RECORDER</EngravedText>
+        </View>
+
         {/* The disc: the largest thing on the screen, because it is the instrument. */}
         <View style={s.wheelArea} onLayout={(e) => setDiscHeight(e.nativeEvent.layout.height || 0)}>
-          {/* Printed on the case over the disc, still while the spool turns. */}
-          <View pointerEvents="none" style={s.wordmark}>
-            <Text style={[t.font.title, s.wordmarkTitle]}>TRNV</Text>
-            <EngravedText size={8} color={t.textMuted}>4-TRACK DIGITAL TAPE RECORDER</EngravedText>
-          </View>
           <View
             ref={wheelNode}
             onLayout={() => { wheelSize.current = size; measureWheel(); }}
             style={{ width: size, height: size }}
             {...wheel.panHandlers}
-            accessibilityLabel="Tape reel. Drag around to scrub, fling to fast-forward or rewind."
+            accessibilityLabel="Wheel. Drag around to spin the tape, fling to fast-forward or rewind."
           >
-            <Animated.View pointerEvents="none" style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center', transform: [{ rotate: spin }] }}>
+            {/* Fixed on the case, not on the wheel: the one thing that does not
+                turn, so the witness mark has something to pass under. */}
+            <View pointerEvents="none" style={s.pointer}>
               <View
                 style={{
-                  position: 'absolute',
-                  width: size,
-                  height: size,
-                  borderRadius: size / 2,
-                  backgroundColor: glassFill,
-                  borderWidth: grabbed ? 2 : 1,
-                  borderColor: grabbed ? t.warning : glassStroke,
+                  width: 0,
+                  height: 0,
+                  borderLeftWidth: 5,
+                  borderRightWidth: 5,
+                  borderTopWidth: 7,
+                  borderLeftColor: 'transparent',
+                  borderRightColor: 'transparent',
+                  borderTopColor: t.accent,
                 }}
               />
-              <GlassReel size={size * 0.9} accent={t.accent} />
-              <Bezel size={size} color={t.textMuted} accent={t.accent} />
-              {/* A lens, not a hole: one specular sweep across the glass. */}
+            </View>
+            <Animated.View pointerEvents="none" style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center', transform: [{ rotate: spin }] }}>
+              <WheelDisc size={size * 0.96} accent={t.accent} />
+              {/* One specular sweep over the metal: a light, not a texture. */}
               <GlassSpecular
                 style={{ position: 'absolute', left: size * 0.07, top: size * 0.07, width: size * 0.86, height: size * 0.86, borderRadius: size * 0.43 }}
               />
             </Animated.View>
+            {/* The wheel sits in a recess in the case. The ring is drawn last, on
+                top of the wheel's edge: an absolutely positioned strip earlier in
+                the tree would paint over the whole disc rather than ring it. */}
+            <View
+              pointerEvents="none"
+              style={{
+                position: 'absolute',
+                left: 0,
+                top: 0,
+                width: size,
+                height: size,
+                borderRadius: size / 2,
+                borderWidth: Math.max(5, size * 0.02),
+                borderColor: grabbed ? t.warning : '#08090B',
+              }}
+            />
           </View>
           {/* The mode keys and the one ± pair, as they sit below the disc on the
               machine. The pair belongs to whichever mode is selected. */}
@@ -1599,11 +1603,12 @@ const s = StyleSheet.create({
   },
   // Printed on the disc's face, as it is on the machine, rather than stacked above
   // it: the disc is the biggest thing on the screen and has room for its own name.
-  wordmark: { position: 'absolute', top: 44, left: 0, right: 0, alignItems: 'center', zIndex: 2 },
+  wordmark: { alignItems: 'center', marginTop: 4 },
   wordmarkTitle: { fontSize: 15, lineHeight: 19, letterSpacing: 5, color: 'rgba(255,255,255,0.55)' },
   onAir: { height: 34, marginTop: 6, marginHorizontal: 18, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 8, borderWidth: 1, borderColor: glassStroke, backgroundColor: glassFill },
   onAirLamp: { width: 6, height: 6, borderRadius: 3 },
   wheelArea: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  pointer: { position: 'absolute', top: -2, left: 0, right: 0, alignItems: 'center', zIndex: 4 },
 
   // alignSelf: the wheel area centres its children, and a centred row would shrink
   // to its own width — the ± pair has to reach the edges of the wheel, not sit in
