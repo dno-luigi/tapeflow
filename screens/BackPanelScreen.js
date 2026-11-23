@@ -48,9 +48,7 @@ export default function BackPanelScreen() {
   const settings = studio.settings || {};
   const sessions = studio.sessions || [];
   const session = sessions.find((s) => s.id === studio.currentSessionId) || null;
-  const tracks = session?.tracks || [];
   const updateSettings = studio.updateSettings;
-  const updateTrack = studio.updateTrack;
 
   const [user, setUser] = useState(null);
   const [timeOpen, setTimeOpen] = useState(false);
@@ -58,7 +56,6 @@ export default function BackPanelScreen() {
 
   const input = String(settings.input || 'USB-C').toUpperCase().includes('USB') ? 'USB-C' : 'INTERNAL MIC';
   const rate = parseInt(settings.sampleRate, 10) === 48 ? 48 : 96;
-  const masterTape = !!settings.masterTape;
   const reminderOn = !!settings.reminderOn;
   const time = parseTime(settings.reminderTime);
   const days = Array.isArray(settings.reminderDays) ? settings.reminderDays : [];
@@ -173,14 +170,22 @@ export default function BackPanelScreen() {
   // Negative is allowed and means the reel runs the other way.
   const sens = clamp(Number(settings.wheelSens) || 0.8, -4, 4);
   const ceiling = clamp(Number(settings.wheelCeiling) || 3, -8, 8);
+  // A percentage, so 0 has to survive the usual `|| default` trick.
+  const settleRaw = Number(settings.wheelSettle);
+  const settle = Number.isFinite(settleRaw) ? clamp(settleRaw, 0, 100) : 50;
   const stepWheel = (key, dir) => {
     buzz();
     if (!updateSettings) return;
     if (key === 'wheelSens') {
       const step = Math.abs(sens) < 1 ? 0.1 : 0.2;
       updateSettings({ wheelSens: Math.round(clamp(sens + dir * step, -4, 4) * 10) / 10, wheelTuned: true });
-    } else {
+    } else if (key === 'wheelCeiling') {
       updateSettings({ wheelCeiling: Math.round(clamp(ceiling + dir * 0.5, -8, 8) * 10) / 10, wheelTuned: true });
+    } else {
+      // Deliberately does not set wheelTuned: that flag means the speed-per-turn
+      // and top-speed numbers were chosen, and it gates moving an old saved default
+      // forward. Setting the let-go alone must not claim those were tuned.
+      updateSettings({ wheelSettle: clamp(settle + dir * 10, 0, 100) });
     }
   };
   const wheelRow = (key, title, helper, value) => (
@@ -273,28 +278,20 @@ export default function BackPanelScreen() {
           ) : null}
         </Section>
 
-        <Section title="TAPE" t={t}>
-          <ToggleSwitch label="MASTER TAPE SOUND" value={masterTape} helper="Adds saturation, hiss and flutter. Off is clean."
-            onValueChange={(v) => { buzz(); updateSettings && updateSettings({ masterTape: v }); }} />
-          <View style={{ marginTop: 12 }}>
-            <ToggleSwitch label="BOUNCE · PRINT THE MUSIC" value={!!settings.bounce}
-              helper="Records the playing tracks into the take, so a pass stands on its own. Those tracks are left out while it plays."
-              onValueChange={(v) => { buzz(); updateSettings && updateSettings({ bounce: v }); }} />
-          </View>
-          <View style={[styles.rowCenter, { marginTop: 12, justifyContent: 'space-between' }]}>
-            {[0, 1, 2, 3].map((i) => (
-              <View key={i} style={{ flex: 1, alignItems: 'center' }}>
-                <ToggleSwitch compact label={`TRK ${i + 1}`} value={!!tracks[i]?.tapeSound}
-                  onValueChange={(v) => { buzz(); updateTrack && updateTrack(i, { tapeSound: v }); }} />
-              </View>
-            ))}
-          </View>
+        {/* Everything here changes what a pass contains. Nothing on this panel
+            pretends to make the sound tape-like: the deck records and plays files. */}
+        <Section title="PRINT" t={t}>
+          <ToggleSwitch label="BOUNCE · PRINT THE MUSIC" value={!!settings.bounce}
+            helper="Records the playing tracks into the take, so a pass stands on its own. Those tracks are left out while it plays."
+            onValueChange={(v) => { buzz(); updateSettings && updateSettings({ bounce: v }); }} />
         </Section>
 
         <Section title="REEL" t={t}>
           {wheelRow('wheelSens', 'SPEED PER TURN', 'Higher is twitchier. Negative runs the reel the other way.', sens.toFixed(1) + '×')}
           <View style={{ height: 10 }} />
           {wheelRow('wheelCeiling', 'TOP SPEED', 'A hard spin stops here. Negative runs the reel the other way.', ceiling.toFixed(1) + '×')}
+          <View style={{ height: 10 }} />
+          {wheelRow('wheelSettle', 'SETTLE', 'How the reel comes back to speed when you let go. 0% stops dead, 100% coasts.', settle + '%')}
         </Section>
 
         <Section title="REMINDER" t={t}>

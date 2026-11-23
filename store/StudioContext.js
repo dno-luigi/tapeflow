@@ -15,13 +15,16 @@ const DEFAULT_SETTINGS = {
   // Off by default: a bounce prints the music into the take, which is right when a
   // pass has to stand on its own and wrong while the tracks are still being edited.
   bounce: false,
-  masterTape: false,
   // How much speed a turn of the reel is worth. Larger is twitchier: at 0.8 a turn
   // and a quarter is 1x, and the deck's WHEEL stepper moves it from 0.1 to 4.
   wheelSens: 0.8,
   // The fastest a hand on the reel can take the tape. Set on the back panel; a hard
   // spin approaches this instead of running away.
   wheelCeiling: 3,
+  // How the reel comes back to speed when the hand lets go, as a percentage: 0
+  // stops dead, 100 coasts for a couple of seconds, 50 is the feel the deck had
+  // before this was adjustable. Set on the back panel.
+  wheelSettle: 50,
   // True only once the back panel has set the reel's numbers, so an old default
   // saved by an earlier build can be moved forward without ever overriding a number
   // the hand chose.
@@ -49,7 +52,7 @@ function createdLabel() {
 }
 
 function emptyTrack() {
-  return { armed: false, tapeSound: false, level: 0.75, pan: 0, activeTakeId: null, takes: [] };
+  return { armed: false, level: 0.75, pan: 0, activeTakeId: null, takes: [] };
 }
 
 function emptySession(name) {

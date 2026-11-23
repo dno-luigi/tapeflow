@@ -12,7 +12,7 @@ import { ART } from '../constants/artwork';
 import { useStudio } from '../store/StudioContext';
 import { createMixer, buildItems, supersedeSkip } from '../lib/audio/TapeMixer';
 import { applyLevelOverride } from '../lib/audio/mixPlan';
-import { wheelTransport, DEG_PER_SEC_AT_1X, HAND_MIN, HAND_MAX } from '../lib/audio/wheel';
+import { wheelTransport, settleRates, DEG_PER_SEC_AT_1X, HAND_MIN, HAND_MAX } from '../lib/audio/wheel';
 import EngravedText from '../components/EngravedText';
 import VUMeter from '../components/VUMeter';
 import TrackLevel from '../components/TrackLevel';
@@ -40,12 +40,8 @@ const PITCH_TRIM_MIN = 0.5;
 const PITCH_TRIM_MAX = 2;
 const SEC_PER_REV = 360 / NORMAL;
 const MAXV = 1440; // 12x
-// The reel's varispeed range, the same one the field recorder it is modelled on
-// offers: half speed to double. Inside it the take bends in pitch with the hand,
-// which is the whole point of the wheel. Past it the tape is spooling rather than
-// being played, so the sound drops out — and half speed is as far down as the
-// sound goes, rather than smearing into mud.
-const PLAYABLE_X = 2;
+// The slowest speed the readout prints while the reel is turning: below it the
+// deck is holding still rather than playing slowly.
 const SLOWEST_X = 0.5;
 const MODES = { stop: 0, rec: NORMAL, rew: -MAXV, ff: MAXV };
 // Fine controls, not presets: the speed moves one percent at a time across the
@@ -148,6 +144,11 @@ export default function DeckScreen() {
   const wheelNormal = DEG_PER_SEC_AT_1X / wheelSens;
   const normalRef = useRef(wheelNormal);
   normalRef.current = wheelNormal;
+  // How the reel returns to speed after a hand lets go: SETTLE on the back panel,
+  // read every frame like the speed is, because the transport loop is made once.
+  // `settleRates` clamps and defaults a missing setting, so a stored 0 survives.
+  const settleRef = useRef(settleRates(50));
+  settleRef.current = settleRates(Number(settings.wheelSettle));
 
   const [mode, setMode] = useState('stop');
   const [hud, setHud] = useState({ pos: 0, vel: 0 });
@@ -200,8 +201,8 @@ export default function DeckScreen() {
   const lastStop = useRef(0);
   const finishRef = useRef(() => {});
   const phys = useRef({
-    angle: 0, vel: 0, pos: 0, dragging: false, locked: false, mode: 'stop',
-    lastMoveT: 0, lastA: 0, hapticAcc: 0, recStart: 0, recTracks: [],
+    angle: 0, vel: 0, pos: 0, dragging: false, mode: 'stop',
+    lastMoveT: 0, lastA: 0, hapticAcc: 0, recStart: 0, recTracks: [], handSpun: false,
   }).current;
 
   const flash = (m) => {
@@ -319,11 +320,19 @@ export default function DeckScreen() {
     const finish = async () => {
       let uri = null;
       let peak = null;
+      // How long the microphone really recorded, when the platform tells us. A
+      // hand on the reel can drag the head faster or slower than real time, so
+      // tape travel and audio length are not the same number after a spin.
+      let captured = null;
+      // Whether the hand drove the reel during the pass. A print is rendered at one
+      // rate, and a spun pass has no single rate, so it cannot be printed faithfully.
+      const handSpun = phys.handSpun === true;
       try {
         if (Platform.OS === 'web') {
           const take = await stopMicTake();
           uri = take && take.uri;
           peak = take && typeof take.peak === 'number' ? take.peak : null;
+          captured = take && typeof take.duration === 'number' ? take.duration : null;
         } else {
           await recorder.stop();
           uri = recorder.uri;
@@ -332,10 +341,15 @@ export default function DeckScreen() {
         uri = null;
       }
       safe(() => setAudioModeAsync({ playsInSilentMode: true, allowsRecording: false }).catch(() => {}));
+      // The audio is the truth about how long the pass was. The take is laid down
+      // at the length that was actually captured, so a fast spin does not leave a
+      // take that plays its real few seconds and then sits silent while the head
+      // travels past the rest of the tape it thinks it covers.
+      const length = Math.max(0, Math.round((captured > 0 ? captured : dur) * 10) / 10);
       // A dub can be short: a drum stab or a single word is the point of layering
       // a part, and a whole second of minimum threw those away. This still
       // ignores a tap that was never meant to record anything.
-      if (dur < 0.4) {
+      if (length < 0.4) {
         flash('TOO SHORT · NOTHING SAVED');
         return;
       }
@@ -348,7 +362,7 @@ export default function DeckScreen() {
       // out of the mix while it is heard.
       let sources = null;
       let sourcesMissing = 0;
-      if (settings.bounce && Platform.OS === 'web') {
+      if (settings.bounce && Platform.OS === 'web' && !handSpun) {
         try {
           const from = tracks
             .map((tr, i) => i)
@@ -358,13 +372,13 @@ export default function DeckScreen() {
               const tk = (tr.takes || []).find((x) => x.id === tr.activeTakeId) || null;
               if (!tk || !tk.uri) return false;
               // Only the takes the head actually crossed while the pass was running.
-              return (Number(tk.start) || 0) < start + dur && (Number(tk.start) || 0) + (Number(tk.duration) || 0) > start;
+              return (Number(tk.start) || 0) < start + length && (Number(tk.start) || 0) + (Number(tk.duration) || 0) > start;
             });
           if (from.length) {
             const printed = await renderBounce({
               micUri: uri,
               start,
-              duration: Math.round(dur * 10) / 10,
+              duration: length,
               rate: speed || 1,
               tracks,
               sourceIndexes: from,
@@ -385,9 +399,6 @@ export default function DeckScreen() {
         }
       }
       try {
-        // One decimal, like the import path: a 3.54s take should stop where the
-        // audio stops, not 0.46s past it in the mixer.
-        const length = Math.round(dur * 10) / 10;
         const takeId = newTakeId();
         list.forEach((i) => studio.addTake && studio.addTake(i, length, undefined, { uri, start, id: takeId, peak, sources }));
         // Write the audio to the device as soon as it exists: a blob URL dies with
@@ -396,7 +407,15 @@ export default function DeckScreen() {
         // A pass the microphone heard nothing on is still saved — its place and
         // length on the tape are real — but it says so rather than looking like
         // audio that has gone missing.
-        flash(sources ? 'BOUNCED · ' + fmtShort(dur) + (sourcesMissing > 0 ? ' · ' + sourcesMissing + ' HAD NO AUDIO' : '') : peak === 0 ? 'SILENT TAKE · THE MIC HEARD NOTHING' : 'TAKE SAVED · ' + fmtShort(dur));
+        let said = 'TAKE SAVED · ' + fmtShort(length);
+        if (sources) {
+          said = 'BOUNCED · ' + fmtShort(length) + (sourcesMissing > 0 ? ' · ' + sourcesMissing + ' HAD NO AUDIO' : '');
+        } else if (settings.bounce && Platform.OS === 'web' && handSpun) {
+          said = 'TAKE SAVED · NOT PRINTED (HAND ON THE REEL)';
+        } else if (peak === 0) {
+          said = 'SILENT TAKE · THE MIC HEARD NOTHING';
+        }
+        flash(said);
       } catch (e) {
         Alert.alert('Could not save the take', (e && e.message) || 'Try again.');
       }
@@ -438,21 +457,29 @@ export default function DeckScreen() {
       const dt = Math.min(0.05, Math.max(0.001, (now - prev) / 1000));
       prev = now;
       const p = phys;
+      const settle = settleRef.current;
       if (p.dragging) {
-        // A hand that stops turning lets the sound down gently, not with a drop.
-        if (now - p.lastMoveT > 90) p.vel *= Math.exp(-3 * dt);
+        // A hand that stops turning lets the sound down gently, not with a drop —
+        // at whatever rate SETTLE is set to.
+        if (now - p.lastMoveT > 90) p.vel *= Math.exp(-settle.holding * dt);
       } else {
         if (p.mode === 'rec') {
-          p.vel = normalRef.current;
+          // Letting go of the reel during a pass settles back to the deck's own
+          // speed instead of snapping there: a pass that started slow should be
+          // heard arriving at 1x, not jumping to it.
+          const target = normalRef.current;
+          const k = Math.abs(target) > Math.abs(p.vel) ? settle.speeding : settle.slowing;
+          p.vel += (target - p.vel) * (1 - Math.exp(-k * dt));
+          if (Math.abs(target - p.vel) < 1) p.vel = target;
         } else {
           const target =
             p.mode === 'play'
               ? normalRef.current * speedRef.current * trimRef.current
               : MODES[p.mode] || 0;
-          // Speeding up is quick (the hand has already asked for it); slowing down
-          // and settling after a spin glide, so letting go sounds like the reel
-          // finding its speed rather than the tape being snatched back.
-          const k = Math.abs(target) > Math.abs(p.vel) ? 5 : 1.4;
+          // Speeding up is quicker than slowing down (the hand has already asked
+          // for it), and how long the let-go glides is the SETTLE setting: letting
+          // go should sound like the reel finding its speed, not being snatched.
+          const k = Math.abs(target) > Math.abs(p.vel) ? settle.speeding : settle.slowing;
           p.vel += (target - p.vel) * (1 - Math.exp(-k * dt));
           if (Math.abs(target - p.vel) < 1) p.vel = target;
         }
@@ -533,18 +560,16 @@ export default function DeckScreen() {
       phys.hapticAcc = 0;
       phys.samples = [];
       phys.acc = 0;
-      if (phys.mode === 'rec') {
-        phys.locked = true;
-        flash('STOP RECORDING TO SCRUB');
-        return;
-      }
-      phys.locked = false;
+      // The reel is playable during a pass. A take that starts slow and is let go
+      // is made by the hand, and there is no physical reason the hand should be
+      // refused while the microphone is open — the reel is a performance control
+      // for the music, not a lid on the recorder. Only the timeline below stays
+      // locked mid-pass, because moving the head would tear where the take sits.
       phys.dragging = true;
       setGrabbed(true);
       Haptics.selectionAsync().catch(() => {});
     },
     onPanResponderMove: (e) => {
-      if (phys.locked) return;
       const a = reelAngleDeg(e);
       if (a === null) return;
       let d = a - phys.lastA;
@@ -557,6 +582,8 @@ export default function DeckScreen() {
       // up, as the hand expects.
       if (invertRef.current) d = -d;
       if (!phys.dragging) return;
+      // A pass the hand drove cannot be printed later: remember that it happened.
+      if (phys.mode === 'rec') phys.handSpun = true;
       const now = Date.now();
       const dt = Math.max(8, now - phys.lastMoveT) / 1000;
       phys.lastMoveT = now;
@@ -593,8 +620,8 @@ export default function DeckScreen() {
         Haptics.selectionAsync().catch(() => {});
       }
     },
-    onPanResponderRelease: () => { phys.dragging = false; phys.locked = false; setGrabbed(false); },
-    onPanResponderTerminate: () => { phys.dragging = false; phys.locked = false; setGrabbed(false); },
+    onPanResponderRelease: () => { phys.dragging = false; setGrabbed(false); },
+    onPanResponderTerminate: () => { phys.dragging = false; setGrabbed(false); },
   })).current;
 
   // Flipping to the back panel by swiping is kept, but only from the edge of the
@@ -774,6 +801,7 @@ export default function DeckScreen() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy).catch(() => {});
     phys.recStart = phys.pos;
     phys.recTracks = [target];
+    phys.handSpun = false;
     setRecFrom(phys.pos);
     noInputWarned.current = false;
     toMode('rec');
@@ -854,8 +882,27 @@ export default function DeckScreen() {
     ]);
   };
 
+  // What a radio reel is playing. A playlist laid on the tape is unreadable by
+  // ear alone: its songs all sit on one track, so nothing about the track keys
+  // says which one the head is over. The tape position does.
+  const radioSongs = [];
+  tracks.forEach((tr) => (tr.takes || []).forEach((tk) => { if (tk && tk.radio) radioSongs.push(tk); }));
+  const radio = radioSongs.length > 0;
+  let onAir = null;
+  for (let i = 0; i < radioSongs.length; i += 1) {
+    const tk = radioSongs[i];
+    const from = Number(tk.start) || 0;
+    const off = hud.pos - from;
+    if (off < 0 || off >= (Number(tk.duration) || 0)) continue;
+    // Two songs only overlap on a reel that was hand-edited; the later one wins,
+    // since that is the start the head crossed most recently.
+    if (!onAir || from >= (Number(onAir.start) || 0)) onAir = tk;
+  }
+
   // Layout
-  const chrome = insets.top + insets.bottom + 44 + 64 + 40 + 64 + 86 + 64 + 28 + 64;
+  // The now-playing line only exists on a radio reel, and the reel is sized to
+  // leave room for it rather than growing into it when the tape starts.
+  const chrome = insets.top + insets.bottom + 44 + 64 + (radio ? 40 : 0) + 40 + 64 + 86 + 64 + 28 + 64;
   const size = Math.max(170, Math.min(W - 32, H - chrome));
   wheelSize.current = size;
 
@@ -1077,6 +1124,37 @@ export default function DeckScreen() {
           <VUMeter width={112} height={56} level={level} label="IN" />
         </View>
 
+        {/* What the head is over, on a radio reel. Without it a playlist on the
+            tape plays song after song with nothing on the deck to name them. */}
+        {radio ? (
+          <View
+            style={s.onAir}
+            accessible
+            accessibilityLabel={
+              onAir
+                ? 'Playing ' + (onAir.title || 'a song') + (onAir.artist ? ' by ' + onAir.artist : '')
+                : 'Between songs on this radio reel'
+            }
+          >
+            <View style={[s.onAirLamp, { backgroundColor: onAir ? (moving ? t.accent : t.warning) : glassStroke }]} />
+            <View style={{ flex: 1, minWidth: 0 }}>
+              {onAir ? (
+                <>
+                  <EngravedText size={12} color={moving ? t.accent : t.text} numberOfLines={1}>{onAir.title || 'Untitled track'}</EngravedText>
+                  <EngravedText size={10} color={t.textMuted} numberOfLines={1}>
+                    {(onAir.artist || 'Unknown artist') + (onAir.preview ? ' · PREVIEW' : '')}
+                  </EngravedText>
+                </>
+              ) : (
+                <EngravedText size={11} color={t.textMuted} numberOfLines={1}>BETWEEN SONGS · SPIN TO THE NEXT</EngravedText>
+              )}
+            </View>
+            {onAir && onAir.n ? (
+              <EngravedText size={10} color={t.textMuted}>{onAir.n + '/' + radioSongs.length}</EngravedText>
+            ) : null}
+          </View>
+        ) : null}
+
         {/* The one big reel */}
         <View style={s.wheelArea}>
           <View
@@ -1130,7 +1208,13 @@ export default function DeckScreen() {
                 accessibilityLabel={'Speed ' + speedText + ', drag to fine tune'}
               >
                 <EngravedText size={12} color={recording ? t.accent : t.warning}>
-                  {recording ? 'REC · 100%' : mode === 'ff' || mode === 'rew' ? 'SPOOLING' : moving ? speedPct + '%' : speedText}
+                  {recording && !moving
+                    ? 'REC · 100%'
+                    : (mode === 'ff' || mode === 'rew') && !moving
+                      ? 'SPOOLING'
+                      : moving
+                        ? speedPct + '%'
+                        : speedText}
                 </EngravedText>
               </View>
               <Pressable
@@ -1392,6 +1476,8 @@ const s = StyleSheet.create({
   top: { height: 44, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12 },
   topLeft: { flex: 1, minHeight: 44, flexDirection: 'row', alignItems: 'center', paddingRight: 8 },
   topBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  onAir: { height: 36, marginTop: 4, marginHorizontal: 20, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 8, borderWidth: 1, borderColor: glassStroke, backgroundColor: glassFill },
+  onAirLamp: { width: 6, height: 6, borderRadius: 3 },
   readout: { height: 64, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16 },
   counter: { width: 168, height: 52, borderRadius: 6, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   pinhole: { position: 'absolute', right: 6, bottom: 6, width: 8, height: 8, borderRadius: 4 },

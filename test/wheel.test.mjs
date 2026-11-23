@@ -15,6 +15,7 @@ import {
   HAND_CEILING,
   ELEMENT_MIN,
   ELEMENT_MAX,
+  settleRates,
 } from '../lib/audio/wheel.js';
 
 const turn = (fraction) => DEG_PER_SEC_AT_1X * fraction;
@@ -127,10 +128,36 @@ test('play keeps the speed control’s range, and its start-up gate', () => {
   assert.equal(wheelTransport({ mode: 'rec', dragging: false, vel: turn(1) }).rate, 1);
 });
 
-test('fast-forward and rewind stay spooling', () => {
-  assert.equal(wheelTransport({ mode: 'ff', dragging: true, vel: turn(1) }).playing, false);
-  assert.equal(wheelTransport({ mode: 'rew', dragging: true, vel: -turn(1) }).playing, false);
+test('the keys alone spool in silence, but a hand is heard in every mode', () => {
+  // The transport keys move the head without listening to it. The wheel is the
+  // instrument, so a hand on it sounds whatever key is down — the deck is not a
+  // tape that has to go quiet because FF is pressed.
   assert.equal(wheelTransport({ mode: 'ff', dragging: false, vel: turn(12) }).playing, false);
+  assert.equal(wheelTransport({ mode: 'rew', dragging: false, vel: -turn(12) }).playing, false);
+  assert.equal(wheelTransport({ mode: 'ff', dragging: true, vel: turn(1) }).playing, true);
+  assert.equal(wheelTransport({ mode: 'ff', dragging: true, vel: turn(1) }).rate, 1);
+  assert.equal(wheelTransport({ mode: 'rew', dragging: true, vel: -turn(1) }).rate, -1);
+  // A still hand is still silence, in any mode.
+  assert.equal(wheelTransport({ mode: 'ff', dragging: true, vel: 0 }).playing, false);
+});
+
+test('the settle control sets how the reel comes back to speed', () => {
+  // The let-go is a setting, not a law: 50% is the feel the deck had, and either
+  // side of it is the hand's call.
+  assert.deepEqual(settleRates(50), { slowing: 1.4, speeding: 5, holding: 3 });
+  assert.ok(settleRates(0).slowing > settleRates(50).slowing, 'a low settle stops sooner');
+  assert.ok(settleRates(100).slowing < settleRates(50).slowing, 'a high settle coasts longer');
+  assert.ok(settleRates(100).slowing > 0, 'however long it coasts, it never stops decaying');
+  // Every rate moves together, so the feel stays one control rather than three.
+  // Getting up to speed is quickest, a hand held still damps next, and the let-go
+  // glide after a spin is the longest — the same order the deck always had.
+  const slow = settleRates(20);
+  assert.ok(slow.speeding > slow.holding && slow.holding > slow.slowing);
+  // Out of range and nonsense land inside the range instead of inverting it.
+  assert.equal(settleRates(-40).slowing, settleRates(0).slowing);
+  assert.equal(settleRates(400).slowing, settleRates(100).slowing);
+  assert.equal(settleRates(NaN).slowing, 1.4);
+  assert.equal(settleRates(undefined).slowing, 1.4);
 });
 
 test('a reel that is not moving asks for nothing', () => {
