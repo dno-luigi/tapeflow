@@ -6,6 +6,9 @@ dist/
 artifacts/
 *.log
 
+# The build stamp is written by scripts/build-stamp.mjs at build time.
+lib/buildInfo.js
+
 # Local secrets. Nothing here should ever be committed.
 .env
 .env.local

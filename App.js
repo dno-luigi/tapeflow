@@ -10,6 +10,7 @@ import { StatusBar } from 'expo-status-bar';
 
 import { ThemeProvider, useTheme, guardScreen } from './ui/theme';
 import { lockPage } from './lib/lockPage';
+import { logBuildOnce } from './lib/build';
 import { AppStoreProvider } from './store/StudioContext';
 
 import WelcomeScreen from './screens/WelcomeScreen';
@@ -22,6 +23,9 @@ import RadioScreen from './screens/RadioScreen';
 
 // Before anything renders: a pull-down on the web must not reload the deck.
 lockPage();
+
+// One line, once, so the live build can be identified from the console alone.
+logBuildOnce();
 
 const RootStack = createStackNavigator();
 

@@ -14,6 +14,7 @@ import EngravedText from '../components/EngravedText';
 import { ObsidianBackdrop } from '../ui/glass';
 import RotarySelector from '../components/RotarySelector';
 import ToggleSwitch from '../components/ToggleSwitch';
+import { buildLabel } from '../lib/build';
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
 const WEEKDAY_NUM = { Mon: 2, Tue: 3, Wed: 4, Thu: 5, Fri: 6 };
@@ -223,6 +224,10 @@ export default function BackPanelScreen() {
         <View style={styles.top}>
           <View style={{ flex: 1 }}>
             <EngravedText size={12} color={t.textMuted}>{`REAR · SESSION: ${session?.name || 'Untitled 1'}`}</EngravedText>
+            {/* Which build is on the device. Compare two deploys by eye. */}
+            <Text selectable style={[t.font.label, { fontSize: 10, lineHeight: 14, color: t.textMuted, opacity: 0.75, marginTop: 3 }]}>
+              {`BUILD ${buildLabel}`}
+            </Text>
           </View>
           <Pressable onPress={goDeck} accessibilityRole="button" accessibilityLabel="Flip back to the deck" style={styles.flip} hitSlop={6}>
             <Ionicons name="chevron-back" size={24} color={t.text} />
