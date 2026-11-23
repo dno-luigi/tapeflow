@@ -76,7 +76,7 @@ export function Knob({ label, icon, onPress, onLongPress, delayLongPress, access
  * A transport key. The caption sits UNDER the key, the way it is printed on the
  * case of the machine, so the row reads as hardware and not as a toolbar.
  */
-export function KeyCap({ icon, label, onPress, accessibilityLabel, active, tone = 'default', height = 46 }) {
+export function KeyCap({ icon, label, onPress, onPressIn, onPressOut, accessibilityLabel, active, tone = 'default', height = 46 }) {
   const t = useTheme();
   const record = tone === 'record';
   const face = record
@@ -86,6 +86,8 @@ export function KeyCap({ icon, label, onPress, accessibilityLabel, active, tone 
     <View style={st.keyUnit}>
       <Pressable
         onPress={onPress}
+        onPressIn={onPressIn}
+        onPressOut={onPressOut}
         accessibilityRole="button"
         accessibilityLabel={accessibilityLabel || label}
         style={({ pressed }) => [

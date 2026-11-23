@@ -9,7 +9,7 @@ import { useTheme } from '../ui/theme';
 import { useStudio } from '../store/StudioContext';
 import { createMixer, buildItems, supersedeSkip } from '../lib/audio/TapeMixer';
 import { applyLevelOverride } from '../lib/audio/mixPlan';
-import { wheelTransport, settleRates, DEG_PER_SEC_AT_1X } from '../lib/audio/wheel';
+import { wheelTransport, settleRates, windSpeed, DEG_PER_SEC_AT_1X } from '../lib/audio/wheel';
 import EngravedText from '../components/EngravedText';
 import { Knob, KeyCap, LedLadder } from '../components/hardware';
 import TrackLevel from '../components/TrackLevel';
@@ -38,7 +38,9 @@ const PITCH_TRIM_MAX = 2;
 const MAXV = 1440; // 12x
 // One bar of count-in before a pass, when the click is on: four beats to the bar.
 const COUNT_IN = 4;
-const MODES = { stop: 0, rec: NORMAL, rew: -MAXV, ff: MAXV };
+// Stop and record are the only fixed speeds left: the wind keys climb with the
+// hold, and play follows the speed, key and tempo.
+const MODES = { stop: 0, rec: NORMAL };
 // Fine controls, not presets: the speed moves one percent at a time across the
 // reel's whole range and the key five cents at a time, and both can be dragged
 // to anywhere in between.
@@ -221,6 +223,9 @@ export default function DeckScreen() {
   const shake = useRef(new Animated.Value(0)).current;
   const msgTimer = useRef(null);
   const lastStop = useRef(0);
+  // When the held wind key went down, on the animation clock. 0 means "at the next
+  // frame", so the ramp is measured against the same clock that moves the tape.
+  const windFrom = useRef(0);
   const finishRef = useRef(() => {});
   const phys = useRef({
     angle: 0, vel: 0, pos: 0, dragging: false, mode: 'stop',
@@ -509,10 +514,14 @@ export default function DeckScreen() {
           p.vel += (target - p.vel) * (1 - Math.exp(-k * dt));
           if (Math.abs(target - p.vel) < 1) p.vel = target;
         } else {
+          // The wind keys climb while they are held: a tap walks, a hold runs.
+          if ((p.mode === 'ff' || p.mode === 'rew') && !windFrom.current) windFrom.current = now;
           const target =
             p.mode === 'play'
               ? normalRef.current * speedRef.current * trimRef.current * tempoRateNow()
-              : MODES[p.mode] || 0;
+              : p.mode === 'ff' || p.mode === 'rew'
+                ? (p.mode === 'ff' ? 1 : -1) * windSpeed(now - windFrom.current)
+                : MODES[p.mode] || 0;
           // Speeding up is quicker than slowing down (the hand has already asked
           // for it), and how long the let-go glides is the SETTLE setting: letting
           // go should sound like the reel finding its speed, not being snatched.
@@ -767,13 +776,31 @@ export default function DeckScreen() {
     if (heard.length === 0) flash('NOTHING RECORDED YET · ARM A TRACK AND REC');
     toMode('play');
   };
-  const onRew = () => {
+  // The wind keys are momentary, as they are on the machine: down starts the wind
+  // and the climb, up stops it. A pointer's own tap is already handled by pressOut,
+  // so onPress only fires for a keyboard or a screen reader — there it latches,
+  // because those have no holding and letting go to lean on.
+  const windTapped = useRef(false);
+  const windMode = (dir) => (dir < 0 ? 'rew' : 'ff');
+  const onWindIn = (dir) => {
     Haptics.selectionAsync().catch(() => {});
-    toMode(mode === 'rew' ? 'stop' : 'rew');
+    windTapped.current = false;
+    windFrom.current = 0;
+    toMode(windMode(dir));
   };
-  const onFF = () => {
-    Haptics.selectionAsync().catch(() => {});
-    toMode(mode === 'ff' ? 'stop' : 'ff');
+  const onWindOut = (dir) => {
+    windTapped.current = true;
+    if (phys.mode !== windMode(dir)) return;
+    // A key that is let go stops the tape. The settle curve is for a hand that has
+    // spun the reel; left alone from a 12x wind it would coast metres of tape, so
+    // the reel is braked first and only the last of the speed glides out.
+    phys.vel *= 0.2;
+    toMode('stop');
+  };
+  const onWindPress = (dir) => {
+    if (windTapped.current) { windTapped.current = false; return; }
+    windFrom.current = 0;
+    toMode(phys.mode === windMode(dir) ? 'stop' : windMode(dir));
   };
   const onStop = () => {
     Haptics.selectionAsync().catch(() => {});
@@ -1544,7 +1571,15 @@ export default function DeckScreen() {
             keys pushed over to the right. */}
         <Animated.View style={[s.transport, { transform: [{ translateX: shake }] }]}>
           <View style={[s.housing, s.windHousing]}>
-            <KeyCap icon="play-back" label="REW" onPress={onRew} accessibilityLabel="Rewind" active={mode === 'rew'} />
+            <KeyCap
+              icon="play-back"
+              label="REW"
+              onPress={() => onWindPress(-1)}
+              onPressIn={() => onWindIn(-1)}
+              onPressOut={() => onWindOut(-1)}
+              accessibilityLabel="Rewind, hold to wind faster"
+              active={mode === 'rew'}
+            />
           </View>
           <View style={[s.housing, { flex: 1 }]}>
             <KeyCap
@@ -1564,7 +1599,15 @@ export default function DeckScreen() {
             <KeyCap icon="stop" label="STOP" onPress={onStop} accessibilityLabel="Stop, double tap for start of tape" />
           </View>
           <View style={[s.housing, s.windHousing]}>
-            <KeyCap icon="play-forward" label="FF" onPress={onFF} accessibilityLabel="Fast forward" active={mode === 'ff'} />
+            <KeyCap
+              icon="play-forward"
+              label="FF"
+              onPress={() => onWindPress(1)}
+              onPressIn={() => onWindIn(1)}
+              onPressOut={() => onWindOut(1)}
+              accessibilityLabel="Fast forward, hold to wind faster"
+              active={mode === 'ff'}
+            />
           </View>
         </Animated.View>
       </View>

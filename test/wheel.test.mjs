@@ -16,6 +16,10 @@ import {
   ELEMENT_MIN,
   ELEMENT_MAX,
   settleRates,
+  windSpeed,
+  WIND_START,
+  WIND_TOP,
+  WIND_RAMP,
 } from '../lib/audio/wheel.js';
 
 const turn = (fraction) => DEG_PER_SEC_AT_1X * fraction;
@@ -158,6 +162,20 @@ test('the settle control sets how the reel comes back to speed', () => {
   assert.equal(settleRates(400).slowing, settleRates(100).slowing);
   assert.equal(settleRates(NaN).slowing, 1.4);
   assert.equal(settleRates(undefined).slowing, 1.4);
+});
+
+test('a held wind key climbs from a walk to the top', () => {
+  // Down is a walking pace, and the climb is monotonic: holding the key always
+  // winds faster than holding it a moment less.
+  assert.equal(windSpeed(0), WIND_START);
+  assert.ok(windSpeed(400) > windSpeed(0));
+  assert.ok(windSpeed(900) > windSpeed(400));
+  assert.equal(windSpeed(WIND_RAMP * 1000), WIND_TOP);
+  // Held past the top, or handed nonsense, it stays at the top rather than
+  // running away or falling back.
+  assert.equal(windSpeed(60000), WIND_TOP);
+  assert.equal(windSpeed(-50), WIND_START);
+  assert.equal(windSpeed(NaN), WIND_START);
 });
 
 test('a reel that is not moving asks for nothing', () => {
